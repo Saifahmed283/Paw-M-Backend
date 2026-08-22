@@ -9,6 +9,7 @@ const FRONTEND_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:3000",
   "http://127.0.0.1:5173",
+  "https://d375-196-156-78-40.ngrok-free.app",
 ];
 
 const VALID_STATUSES = ["pending", "confirmed", "completed", "cancelled"];
@@ -673,74 +674,74 @@ app.post("/api/orders", async (req, res) => {
     ? String(body.paymentMethod)
     : "cash";
 
-  try {
-    const created = await prisma.$transaction(async (tx) => {
-      let total = 0;
-      const lines = [];
-      for (const item of items) {
-        const id = String(item?.id ?? "");
-        const qty = Number(item?.qty ?? 0);
-        if (!id || !Number.isInteger(qty) || qty <= 0) {
-          throw Object.assign(new Error("Invalid cart line."), { status: 400 });
-        }
-        const product = await tx.product.findUnique({ where: { id } });
-        if (!product) {
-          throw Object.assign(new Error(`Product ${id} no longer exists.`), { status: 400 });
-        }
-        if (product.stock < qty) {
-          throw Object.assign(
-            new Error(`${product.name} — only ${product.stock} left in stock.`),
-            { status: 409 },
-          );
-        }
-        const price = Number(product.price);
-        total += price * qty;
-        lines.push({ id, name: product.name, price, qty, image: product.image });
-        await tx.product.update({
-          where: { id },
-          data: { stock: { decrement: qty } },
-        });
-      }
-      total = Math.round(total * 100) / 100;
+try {
+     const created = await prisma.$transaction(async (tx) => {
+       let total = 0;
+       const lines = [];
+       for (const item of items) {
+         const id = String(item?.id ?? "");
+         const qty = Number(item?.qty ?? 0);
+         if (!id || !Number.isInteger(qty) || qty <= 0) {
+           throw Object.assign(new Error("Invalid cart line."), { status: 400 });
+         }
+         const product = await tx.product.findUnique({ where: { id } });
+         if (!product) {
+           throw Object.assign(new Error(`Product ${id} no longer exists.`), { status: 400 });
+         }
+         if (product.stock < qty) {
+           throw Object.assign(
+             new Error(`${product.name} — only ${product.stock} left in stock.`),
+             { status: 409 }
+           );
+         }
+         const price = Number(product.price);
+         total += price * qty;
+         lines.push({ id, name: product.name, price, qty, image: product.image });
+         await tx.product.update({
+           where: { id },
+           data: { stock: { decrement: qty } },
+         });
+       }
+       total = Math.round(total * 100) / 100;
 
-      const proofRef = String(body.paymentRef ?? "").trim();
-      const proofImage = String(body.proofImage ?? "").trim();
-      if (proofImage && proofImage.length > 5_500_000) {
-        return res.status(400).json({ error: "Proof image is too large (max 4 MB)." });
-      }
-      const isInstaPay = paymentMethod === "instapay";
-      const hasProof = Boolean(proofRef) || Boolean(proofImage);
-      const paymentStatus =
-        paymentMethod === "fawry"
-          ? "unpaid"
-          : isInstaPay && hasProof
-            ? "proof_submitted"
-            : "unpaid";
+       const proofRef = String(body.paymentRef ?? "").trim();
+       const proofImage = String(body.proofImage ?? "").trim();
+       if (proofImage && proofImage.length > 5_500_000) {
+         throw Object.assign(new Error("Proof image is too large (max 4 MB)."), { status: 400 });
+       }
+       const isInstaPay = paymentMethod === "instapay";
+       const hasProof = Boolean(proofRef) || Boolean(proofImage);
+       const paymentStatus =
+         paymentMethod === "fawry"
+           ? "unpaid"
+           : isInstaPay && hasProof
+             ? "proof_submitted"
+             : "unpaid";
 
-      return tx.order.create({
-        data: {
-          id: await nextId("ORD", "order"),
-          customerName: String(body.customerName ?? ""),
-          phone: String(body.phone ?? ""),
-          email: String(body.email ?? ""),
-          address: String(body.address ?? ""),
-          items: lines,
-          total,
-          paymentMethod,
-          paymentStatus,
-          paymentRef: paymentMethod === "fawry" ? fawryReference() : proofRef,
-          proofImage: isInstaPay ? proofImage : "",
-        },
-      });
-    });
-    res.status(201).json(created);
-  } catch (e) {
-    if (e?.status === 400 || e?.status === 409) {
-      return res.status(e.status).json({ error: e.message });
-    }
-    console.error(e);
-    res.status(500).json({ error: "Failed to create order" });
-  }
+       return tx.order.create({
+         data: {
+           id: await nextId("ORD", "order"),
+           customerName: String(body.customerName ?? ""),
+           phone: String(body.phone ?? ""),
+           email: String(body.email ?? ""),
+           address: String(body.address ?? ""),
+           items: lines,
+           total,
+           paymentMethod,
+           paymentStatus,
+           paymentRef: paymentMethod === "fawry" ? fawryReference() : proofRef,
+           proofImage: isInstaPay ? proofImage : "",
+         },
+       });
+     }, { timeout: 15000 });
+     res.status(201).json(created);
+   } catch (e) {
+     if (e?.status === 400 || e?.status === 409) {
+       return res.status(e.status).json({ error: e.message });
+     }
+     console.error(e);
+     res.status(500).json({ error: "Failed to create order" });
+   }
 });
 
 /** Submit/update payment proof (InstaPay ref + screenshot, or Fawry receipt number). */
@@ -811,24 +812,28 @@ app.patch("/api/orders/:id/status", async (req, res) => {
     const existing = await prisma.order.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: "Order not found" });
 
-    const updated = await prisma.$transaction(async (tx) => {
-      // Return stock to the shelf when an order is cancelled.
-      if (status === "cancelled" && existing.status !== "cancelled") {
-        const lines = Array.isArray(existing.items) ? existing.items : [];
-        for (const item of lines) {
-          await tx.product.updateMany({
-            where: { id: String(item?.id ?? "") },
-            data: { stock: { increment: Number(item?.qty ?? 0) } },
-          });
-        }
-      }
-      return tx.order.update({ where: { id }, data: { status } });
-    });
-    logAudit("order_status", id, `${existing.customerName}'s order → ${status}`);
-    res.json(updated);
-  } catch {
-    res.status(404).json({ error: "Order not found" });
-  }
+const updated = await prisma.$transaction(async (tx) => {
+       // Return stock to the shelf when an order is cancelled.
+       if (status === "cancelled" && existing.status !== "cancelled") {
+         const lines = Array.isArray(existing.items) ? existing.items : [];
+         for (const item of lines) {
+           await tx.product.updateMany({
+             where: { id: String(item?.id ?? "") },
+             data: { stock: { increment: Number(item?.qty ?? 0) } },
+           });
+         }
+       }
+       return tx.order.update({ where: { id }, data: { status } });
+     }, { timeout: 15000 });
+     logAudit("order_status", id, `${existing.customerName}'s order → ${status}`);
+     res.json(updated);
+   } catch (e) {
+     if (e?.status === 400 || e?.status === 409) {
+       return res.status(e.status).json({ error: e.message });
+     }
+     console.error(e);
+     res.status(500).json({ error: "Failed to update order status" });
+   }
 });
 
 app.delete("/api/orders/:id", async (req, res) => {
