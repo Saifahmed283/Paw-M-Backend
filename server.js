@@ -68,21 +68,15 @@ app.use(
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "http://localhost:3001"],
+      connectSrc: ["'self'", "http://localhost:3001", "https://cdn.pixabay.com", "https://maps.googleapis.com"],
       fontSrc: ["'self'"],
+      mediaSrc: ["'self'", "https://cdn.pixabay.com"],
     },
   }),
 );
 app.use(helmet.referrerPolicy({ policy: "no-referrer" }));
-app.use(
-  helmet.permissionsPolicy({
-    features: {
-      geolocation: ["'none'"],
-      microphone: ["'none'"],
-      camera: ["'none'"],
-    },
-  }),
-);
+app.use(helmet.crossOriginOpenerPolicy({ policy: "same-origin" }));
+app.use(helmet.crossOriginEmbedderPolicy({ policy: "require-corp" }));
 app.use(express.json({ limit: "8mb" }));
 app.use(express.urlencoded({ extended: true, limit: "8mb" }));
 
@@ -186,8 +180,54 @@ app.get("/api/work-session", async (_req, res) => {
     });
     res.json(session ?? null);
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Failed to load work session" });
+console.error(e);
+    res.status(500).json({ error: "Failed to fetch reviews" });
+  }
+});
+
+app.post("/api/google/sync-reviews", async (req, res) => {
+  const { placeId } = req.body ?? {};
+  try {
+    const settings = await prisma.clinicSettings.findUnique({ where: { id: 1 } });
+    const apiKey = settings?.googlePlacesKey ?? "";
+    if (!apiKey)
+      return res.status(400).json({ error: "Google Places API key not configured in settings." });
+    const pid = placeId || settings?.googlePlacesId || "";
+    if (!pid)
+      return res.status(400).json({ error: "Google Places ID not configured in settings." });
+    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(pid)}&fields=reviews,rating,user_ratings_total&key=${apiKey}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (data.status !== "OK" || !data.result?.reviews)
+      return res.status(400).json({ error: data.error_message || "Failed to fetch Google reviews." });
+    const reviews = data.result.reviews;
+    let created = 0;
+    for (const gReview of reviews) {
+      const exists = await prisma.review.findFirst({
+        where: {
+          OR: [
+            { id: `google-${gReview.time}` },
+            { author: gReview.author_name, comment: gReview.text },
+          ],
+        },
+      });
+      if (exists) continue;
+      await prisma.review.create({
+        data: {
+          productId: "clinic",
+          author: gReview.author_name,
+          rating: gReview.rating,
+          comment: gReview.text,
+          status: "approved",
+          id: `google-${gReview.time}`,
+        },
+      });
+      created++;
+    }
+    res.json({ synced: created, total: reviews.length });
+  } catch (e) {
+    console.error("Google sync error:", e);
+    res.status(500).json({ error: "Failed to sync Google reviews." });
   }
 });
 
@@ -1459,16 +1499,18 @@ app.get("/api/settings", async (_req, res) => {
       where: { id: 1 },
     });
     res.json(
-      settings ?? {
-        name: "Paw-M",
-        tagline: "Veterinary care, quietly excellent.",
-        phone: "",
-        emergency: "",
-        whatsapp: "",
-        email: "",
-        address: "",
-        currency: "$",
+settings ?? {
+        name: "Paw Clinic Madinaty",
+        tagline: "4.9 · 25 Google Reviews — Veterinary care with love.",
+        phone: "012 10105624",
+        emergency: "012 10105624",
+        whatsapp: "012 10105624",
+        email: "hello@pawclinicmadinaty.com",
+        address: "Craft Zoon, Second New Cairo, Cairo Governorate 19519",
+        currency: "EGP",
         instapay: "",
+        googlePlacesKey: "",
+        googlePlacesId: "ChIJ7eN6m8f1VxQRShQLeEdq4pU",
       },
     );
   } catch (e) {
@@ -1534,7 +1576,7 @@ app.patch("/api/settings", async (req, res) => {
         whatsapp: (patch.whatsapp ?? "").slice(0, 40),
         email: (patch.email ?? "").slice(0, 120),
         address: (patch.address ?? "").slice(0, 500),
-        currency: currency ?? "$",
+        currency: currency ?? "EGP",
         instapay: instapay ?? "",
       },
     });
@@ -1611,7 +1653,8 @@ app.post("/api/auth/login", async (req, res) => {
     const ok = constantTimeCompare(hash, user.hash);
     if (ok) logAudit("login", "", `Staff sign-in: ${name}`);
     res.json({ ok });
-  } catch {
+  } catch (e) {
+    console.error("Login error:", e);
     res.status(500).json({ error: "Failed to verify credentials" });
   }
 });

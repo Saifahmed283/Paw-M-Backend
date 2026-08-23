@@ -87,17 +87,19 @@ model Service {
 }
 
 model ClinicSettings {
-  id        Int      @id @default(1)
-  name      String
-  tagline   String
-  phone     String
-  emergency String
-  whatsapp  String
-  email     String
-  address   String
-  currency  String   @default("$")
-  instapay  String   @default("")
-  updatedAt DateTime @updatedAt
+  id              Int      @id @default(1)
+  name            String
+  tagline         String
+  phone           String
+  emergency       String
+  whatsapp        String
+  email           String
+  address         String
+  currency        String   @default("EGP")
+  instapay        String   @default("")
+  googlePlacesKey String   @default("")
+  googlePlacesId  String   @default("")
+  updatedAt       DateTime @updatedAt
 }
 
 model AdminUser {
