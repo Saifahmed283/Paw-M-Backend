@@ -452,7 +452,9 @@ app.patch("/api/bookings/:id/status", async (req, res) => {
       id,
       `${updated.ownerName}'s booking → ${status}`,
     );
-    const clinicSettings = await prisma.clinicSettings.findUnique({ where: { id: 1 } }).catch(() => null);
+    const clinicSettings = await prisma.clinicSettings
+      .findUnique({ where: { id: 1 } })
+      .catch(() => null);
     const clinicName = clinicSettings?.name || "Paw-M Clinic";
 
     if (status === "confirmed" && existing.email) {
@@ -1077,11 +1079,9 @@ app.patch("/api/orders/:id/payment", async (req, res) => {
   const { id } = req.params;
   const { paymentStatus } = req.body ?? {};
   if (!VALID_PAYMENT_STATUSES.includes(paymentStatus)) {
-    return res
-      .status(400)
-      .json({
-        error: `paymentStatus must be one of: ${VALID_PAYMENT_STATUSES.join(", ")}`,
-      });
+    return res.status(400).json({
+      error: `paymentStatus must be one of: ${VALID_PAYMENT_STATUSES.join(", ")}`,
+    });
   }
   try {
     const existing = await prisma.order.findUnique({ where: { id } });
@@ -1117,7 +1117,10 @@ app.patch("/api/orders/:id/payment", async (req, res) => {
             clinicName,
           }),
         ).catch(() => {});
-      } else if (paymentStatus === "unpaid" && existing.paymentStatus === "proof_submitted") {
+      } else if (
+        paymentStatus === "unpaid" &&
+        existing.paymentStatus === "proof_submitted"
+      ) {
         sendMail(
           buildPaymentFailedEmail({
             to: existing.email,
@@ -1125,7 +1128,8 @@ app.patch("/api/orders/:id/payment", async (req, res) => {
             orderId: updated.id,
             method: updated.paymentMethod,
             clinicName,
-            reason: "Payment proof was not accepted or payment could not be verified.",
+            reason:
+              "Payment proof was not accepted or payment could not be verified.",
           }),
         ).catch(() => {});
       }
@@ -1140,11 +1144,9 @@ app.patch("/api/orders/:id/status", async (req, res) => {
   const { id } = req.params;
   const { status } = req.body ?? {};
   if (!status || !VALID_ORDER_STATUSES.includes(status)) {
-    return res
-      .status(400)
-      .json({
-        error: `status must be one of: ${VALID_ORDER_STATUSES.join(", ")}`,
-      });
+    return res.status(400).json({
+      error: `status must be one of: ${VALID_ORDER_STATUSES.join(", ")}`,
+    });
   }
   try {
     const existing = await prisma.order.findUnique({ where: { id } });
@@ -1172,6 +1174,24 @@ app.patch("/api/orders/:id/status", async (req, res) => {
       id,
       `${existing.customerName}'s order → ${status}`,
     );
+
+    if (existing.email && status !== existing.status) {
+      const clinicSettings = await prisma.clinicSettings
+        .findUnique({ where: { id: 1 } })
+        .catch(() => null);
+      const clinicName = clinicSettings?.name || "Paw-M Clinic";
+      sendMail(
+        buildOrderStatusEmail({
+          to: existing.email,
+          customerName: existing.customerName,
+          orderId: existing.id,
+          status,
+          clinicName,
+          total: existing.total,
+          items: existing.items,
+        }),
+      ).catch(() => {});
+    }
     res.json(updated);
   } catch (e) {
     if (e?.status === 400 || e?.status === 409) {
