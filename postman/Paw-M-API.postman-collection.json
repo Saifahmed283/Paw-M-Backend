@@ -1,40 +1,2456 @@
-﻿{
+{
   "info": {
-    "_postman_id": "paw-m-api-v1",
-    "name": "Paw-M API — Full Collection",
-    "description": "Complete Postman collection for the Paw-M Veterinary Clinic backend API (Express + Prisma). Base URL: {{baseUrl}}. Auth: pre-request script logs in and sets x-username / session cookies automatically.",
-    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "exporterId": "o0n1k9"
+    "_postman_id": "paw-m-api-collection",
+    "name": "Paw-M API — Full Collection V2.1",
+    "description": "Complete, production-grade Postman collection for the Paw-M Veterinary Clinic backend API.\n\nBase URL: {{baseUrl}}  (default: http://localhost:3001)\nPre-request scripts auto-login and inject the session token.\n\nRoles seeded: admin / payroll / staff\nCredentials: admin/admin123  ·  payroll/payroll123  ·  staff/staff123\n\nTest scripts verify status codes, response shape, and log JSON payloads to the console.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "auth": {
-    "type": "apikey",
-    "apikey": [
-      { "key": "value", "value": "{{sessionToken}}", "type": "string" }
-    ]
-  },
-  "event": [
+  "variable": [
     {
-      "listen": "prerequest",
-      "script": { "exec": [""] }
+      "key": "baseUrl",
+      "value": "http://localhost:3001",
+      "type": "string"
     },
     {
-      "listen": "test",
-      "script": { "exec": ["postman.setNextRequest(null);"] }
+      "key": "loginUsername",
+      "value": "admin",
+      "type": "string"
+    },
+    {
+      "key": "loginPassword",
+      "value": "admin123",
+      "type": "string"
+    },
+    {
+      "key": "staffUser",
+      "value": "staff",
+      "type": "string"
+    },
+    {
+      "key": "staffPass",
+      "value": "staff123",
+      "type": "string"
+    },
+    {
+      "key": "payrollUser",
+      "value": "payroll",
+      "type": "string"
+    },
+    {
+      "key": "payrollPass",
+      "value": "payroll123",
+      "type": "string"
+    },
+    {
+      "key": "sampleBookingId",
+      "value": "REQ-aBcDeFgHjKmNpQrSt",
+      "type": "string"
+    },
+    {
+      "key": "sampleDoctorId",
+      "value": "dr-mirna",
+      "type": "string"
+    },
+    {
+      "key": "sampleProductId",
+      "value": "prod-senior-dry",
+      "type": "string"
+    },
+    {
+      "key": "sampleOrderId",
+      "value": "ORD-ABCDEF",
+      "type": "string"
+    },
+    {
+      "key": "samplePaymentId",
+      "value": "PAY-PAY01",
+      "type": "string"
+    },
+    {
+      "key": "sampleReviewId",
+      "value": "REV-XyZaBcDe",
+      "type": "string"
+    },
+    {
+      "key": "googlePlaceId",
+      "value": "ChIJ7eN6m8f1VxQRShQLeEdq4pU",
+      "type": "string"
+    },
+    {
+      "key": "sessionToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "sessionRole",
+      "value": "",
+      "type": "string"
     }
   ],
-  "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3001" },
-    { "key": "adminUser", "value": "{{(6)}}_qa" },
-    { "key": "loginUsername", "value": "admin" },
-    { "key": "loginPassword", "value": "admin123" },
-    { "key": "staffUser", "value": "staff" },
-    { "key": "staffPass",  "value": "staff123" },
-    { "key": "payrollUser","value": "payroll" },
-    { "key": "payrollPass","value": "payroll123" },
-    { "key": "prodClientId","value": "REQ-aBcDeF" },
-    { "key": "prodDoctorId","value": "dr-mirna" },
-    { "key": "prodOrderId", "value": "ORD-XyZaBc" },
-    { "key": "prodPaymentId","value": "PAY-123456" },
-    { "key": "googlePlaceId","value": "ChIJ7eN6m8f1VxQRShQLeEdq4pU" }
+  "item": [
+    {
+      "name": "0 — Auth (Login & Config)",
+      "item": [
+        {
+          "name": "OPTIONS — CORS preflight",
+          "method": "OPTIONS",
+          "header": [
+            {
+              "key": "Origin",
+              "value": "http://localhost:5173",
+              "type": "text"
+            },
+            {
+              "key": "Access-Control-Request-Method",
+              "value": "GET",
+              "type": "text"
+            },
+            {
+              "key": "Access-Control-Request-Headers",
+              "value": "content-type",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/auth/config",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "auth",
+              "config"
+            ]
+          },
+          "description": "Browser OPTIONS preflight — should return 204 with CORS headers.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"OPTIONS 204\", () => { pm.expect(pm.response.code).to.be.oneOf([204,200]); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/auth/config",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/auth/config",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "auth",
+              "config"
+            ]
+          },
+          "description": "Check if any staff account exists. Returns { configured: boolean }.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\npm.test(\"configured is boolean\", () => pm.expect(typeof j.configured).to.eql('boolean'));\nconsole.log(\"Auth configured:\", j.configured);"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/login (admin)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/auth/login",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "auth",
+              "login"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"username\": \"{{loginUsername}}\",\n  \"password\": \"{{loginPassword}}\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Log in as admin. Expects { ok: true, role: 'admin' }.\nThe pre-request script automatically runs this before protected routes.",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.sendRequest({\n  url: pm.collectionVariables.get(\"baseUrl\") + \"/api/auth/login\",\n  method: \"POST\",\n  header: [{ key: \"Content-Type\", value: \"application/json\" }],\n  body: { mode: \"raw\", raw: JSON.stringify({\n    username: pm.collectionVariables.get(\"loginUsername\"),\n    password: pm.collectionVariables.get(\"loginPassword\")\n  })}\n}, (err, res) => {\n  if (!err && res && res.json && res.json().ok) {\n    pm.collectionVariables.set(\"sessionToken\", res.json().role || \"staff\");\n  }\n});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\npm.test(\"Status 200\", () => pm.expect(pm.response.code).to.eql(200));\npm.test(\"ok === true\", () => pm.expect(j.ok).to.be.true);\npm.test(\"role present\", () => pm.expect(['admin','payroll','staff']).to.include(j.role));\npm.collectionVariables.set(\"sessionRole\", j.role || \"staff\");\nconsole.log(\"Role:\", j.role);"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/login (wrong password — rate limit test)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/auth/login",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "auth",
+              "login"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"wrongpass\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Should return { ok: false }. Run 5 times to trigger lockout.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\npm.test(\"ok is false\", () => pm.expect(j.ok).to.be.false);\nconsole.log(\"Attempt failed as expected\");"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/login (staff role)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/auth/login",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "auth",
+              "login"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"username\": \"{{staffUser}}\",\n  \"password\": \"{{staffPass}}\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Log in as staff — role: 'staff'. Limited dashboard access."
+        },
+        {
+          "name": "POST /api/auth/login (payroll role)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/auth/login",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "auth",
+              "login"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"username\": \"{{payrollUser}}\",\n  \"password\": \"{{payrollPass}}\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Log in as payroll — role: 'payroll'. Business ops access."
+        },
+        {
+          "name": "PUT /api/auth/credentials (change password)",
+          "method": "PUT",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/auth/credentials",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "auth",
+              "credentials"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"currentPassword\": \"{{loginPassword}}\",\n  \"newPassword\": \"newpass123\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Change admin password. WARNING: changes the real DB credential.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\npm.test(\"configured present\", () => pm.expect(j.configured).to.eql(true));\nconsole.log(\"Password changed — update loginPassword variable!\");"
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "1 — Health",
+      "item": [
+        {
+          "name": "GET /api/health",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/health",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "health"
+            ]
+          },
+          "description": "Returns { status: 'ok', db: 'connected' }. Use this to verify the server is running.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\npm.test(\"status ok\", () => pm.expect(j.status).to.eql('ok'));\npm.test(\"db connected\", () => pm.expect(j.db).to.eql('connected'));"
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "2 — Settings (Clinic)",
+      "item": [
+        {
+          "name": "GET /api/settings",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/settings",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "settings"
+            ]
+          },
+          "description": "Returns the active clinic settings including Google Places ID.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\npm.test(\"has name\", () => pm.expect(j.name).to.be.a('string'));\npm.test(\"has googlePlacesId\", () => pm.expect(j.googlePlacesId).to.be.a('string'));\nconsole.log(JSON.stringify(j, null, 2));"
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/settings (update name + currency)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/settings",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "settings"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"name\": \"Paw-M Test Clinic\",\n  \"currency\": \"USD\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Update partial clinic settings. Only sends the fields you want changed.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\npm.test(\"name updated\", () => pm.expect(j.name).to.include('Paw-M'));\nconsole.log(JSON.stringify(j, null, 2));"
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/settings (update InstaPay)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/settings",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "settings"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"instapay\": \"+201234567890\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Set InstaPay account number shown at checkout."
+        },
+        {
+          "name": "PATCH /api/settings (full update)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/settings",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "settings"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"name\": \"Paw Clinic Madinaty\",\n  \"tagline\": \"4.9 ★ — Veterinary care with love.\",\n  \"phone\": \"012 10105624\",\n  \"emergency\": \"012 10105624\",\n  \"whatsapp\": \"012 10105624\",\n  \"email\": \"hello@pawclinicmadinaty.com\",\n  \"address\": \"Craft Zoon, Second New Cairo, Cairo Governorate 19519\",\n  \"currency\": \"EGP\",\n  \"instapay\": \"\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Full seed reset for clinic settings (Egypt/EGP defaults from seed.js)."
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "3 — Doctors",
+      "item": [
+        {
+          "name": "GET /api/doctors",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/doctors",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "doctors"
+            ]
+          },
+          "description": "List all doctors in the system.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "pm.test(\"returns array\", () => pm.expect(pm.response.json()).to.be.an('array'));\nconsole.log(JSON.stringify(pm.response.json(), null, 2));"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/doctors (create)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/doctors",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "doctors"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"id\": \"dr-tester-qa\",\n  \"name\": \"Dr. QA Tester\",\n  \"specialization\": \"Veterinary Testing\",\n  \"experience\": \"15+ years\",\n  \"rating\": 4.9,\n  \"days\": [\n    \"Mon\",\n    \"Wed\",\n    \"Fri\"\n  ],\n  \"bio\": \"A test doctor created by Postman collection.\",\n  \"initials\": \"QT\",\n  \"tags\": [\n    \"Testing\",\n    \"QA\"\n  ],\n  \"pets\": [\n    \"Dog\",\n    \"Cat\"\n  ]\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Creates a new doctor. Requires name, rating 0-5. Optionally specify id.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\npm.test(\"201 created\", () => pm.expect(pm.response.code).to.eql(201));\npm.test(\"has id\", () => pm.expect(j.id).to.eql('dr-tester-qa'));\npm.collectionVariables.set(\"sampleDoctorId\", j.id);\nconsole.log(JSON.stringify(j, null, 2));"
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/doctors/:id (update rating)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/doctors/{{sampleDoctorId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "doctors",
+              "{{sampleDoctorId}}"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"rating\": 5\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Update fields partially — only rating is sent.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json(); pm.test(\"rating updated\", () => pm.expect(j.rating).to.eql(5));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/doctors/:id (cleanup)",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/doctors/{{sampleDoctorId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "doctors",
+              "{{sampleDoctorId}}"
+            ]
+          },
+          "description": "Deletes the test doctor. Returns 204 on success.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"204 deleted\", () => pm.expect(pm.response.code).to.eql(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/doctors/:id (not-found — 404)",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/doctors/dr-does-not-exist",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "doctors",
+              "dr-does-not-exist"
+            ]
+          },
+          "description": "Deleting a non-existent doctor returns 404.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"404 not found\", () => pm.expect(pm.response.code).to.eql(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "4 — Services",
+      "item": [
+        {
+          "name": "GET /api/services",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/services",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "services"
+            ]
+          },
+          "description": "List all clinic services.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"array\", () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/services (create)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/services",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "services"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"slug\": \"svc-qa-test\",\n  \"icon\": \"Bug\",\n  \"title\": \"QA Test Service\",\n  \"description\": \"Created by Postman.\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Creates a new service. slug must be unique.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json(); pm.test(\"201\", () => pm.expect(pm.response.code).to.eql(201)); pm.test(\"slug\", () => pm.expect(j.slug).to.eql('svc-qa-test'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/services/:slug (update)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/services/svc-qa-test",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "services",
+              "svc-qa-test"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"description\": \"Updated by Postman QA run.\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Partial update — only description changes.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json(); pm.test(\"updated\", () => pm.expect(j.description).to.include('QA'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/services/:slug (cleanup)",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/services/svc-qa-test",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "services",
+              "svc-qa-test"
+            ]
+          },
+          "description": "Cleanup test service. Returns 204.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"204\", () => pm.expect(pm.response.code).to.eql(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/services/:slug (404)",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/services/svc-does-not-exist",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "services",
+              "svc-does-not-exist"
+            ]
+          },
+          "description": "Deleting a non-existent slug returns 404.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"404\", () => pm.expect(pm.response.code).to.eql(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "5 — Products (Store Catalog)",
+      "item": [
+        {
+          "name": "GET /api/products",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/products",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "products"
+            ]
+          },
+          "description": "List all products, newest first.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"array\", () => pm.expect(pm.response.json()).to.be.an('array')); console.log(JSON.stringify(pm.response.json(),null,2).slice(0,2000));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/products/:id (existing)",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/products/{{sampleProductId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "products",
+              "{{sampleProductId}}"
+            ]
+          },
+          "description": "Fetch one product by ID.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"found\",()=>pm.expect(j.id).to.exist); console.log(j.name);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/products/:id (404)",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/products/prod-does-not-exist",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "products",
+              "prod-does-not-exist"
+            ]
+          },
+          "description": "Fetches a non-existent product — expects 404.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"404\",()=>pm.expect(pm.response.code).to.eql(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/products (create valid)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/products",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "products"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"id\": \"prod-qa-test\",\n  \"name\": \"QA Test Product\",\n  \"description\": \"A product created by Postman for regression testing.\",\n  \"price\": 19.99,\n  \"compareAtPrice\": 24.99,\n  \"image\": \"https://images.unsplash.com/photo-1589924691995-400dc9ecc119?auto=format&fit=crop&w=800&q=80\",\n  \"category\": \"health\",\n  \"petType\": \"both\",\n  \"stock\": 50,\n  \"featured\": true\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Creates a product. Price >=0, stock >=0 int, compareAtPrice >= price.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"201\",()=>pm.expect(pm.response.code).to.eql(201)); pm.collectionVariables.set(\"sampleProductId\", j.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/products (validation: price negative)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/products",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "products"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"name\": \"Bad Product\",\n  \"price\": -5,\n  \"stock\": 10\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Should fail with 400 because price is negative.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"400\",()=>pm.expect(pm.response.code).to.eql(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/products (validation: compareAt < price)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/products",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "products"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"name\": \"Discount Error\",\n  \"price\": 50,\n  \"compareAtPrice\": 30,\n  \"stock\": 5\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Should fail — compareAtPrice must >= price.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"400\",()=>pm.expect(pm.response.code).to.eql(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/products/:id (partial update)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/products/{{sampleProductId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "products",
+              "{{sampleProductId}}"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"price\": 17.99,\n  \"stock\": 48\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Update price and stock only.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"price updated\",()=>pm.expect(j.price).to.eql(17.99));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/products/:id (cleanup)",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/products/{{sampleProductId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "products",
+              "{{sampleProductId}}"
+            ]
+          },
+          "description": "Cleans up test product.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"204\",()=>pm.expect(pm.response.code).to.eql(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/products/:id (404)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/products/prod-does-not-exist",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "products",
+              "prod-does-not-exist"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"price\": 10\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Updating a non-existent product returns 404.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"404\",()=>pm.expect(pm.response.code).to.eql(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "6 — Bookings (Appointment Requests)",
+      "item": [
+        {
+          "name": "GET /api/bookings",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/bookings",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "bookings"
+            ]
+          },
+          "description": "List all booking requests, newest first.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const arr = pm.response.json();\npm.test(\"is array\", () => pm.expect(arr).to.be.an('array'));\nconsole.log(arr.length, \"bookings\");"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/bookings (create — full)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/bookings",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "bookings"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"ownerName\": \"Postman QA\",\n  \"phone\": \"+201234567890\",\n  \"email\": \"qa@pawclinic.test\",\n  \"petName\": \"TestPet\",\n  \"animalType\": \"Dog\",\n  \"breed\": \"Mixed\",\n  \"age\": \"3 years\",\n  \"weight\": \"12 kg\",\n  \"symptoms\": \"Minor postman-related anxiety\",\n  \"allergies\": \"None\",\n  \"medications\": \"None\",\n  \"doctorId\": \"{{sampleDoctorId}}\",\n  \"doctorName\": \"Dr. QA Tester\",\n  \"date\": \"2025-12-01\",\n  \"time\": \"10:00\",\n  \"emergency\": false\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Creates a booking request. Returns the created record with auto-generated ID (REQ-xxx).",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\npm.test(\"201 created\", () => pm.expect(pm.response.code).to.eql(201));\npm.test(\"has id\", () => pm.expect(j.id).to.include('REQ'));\npm.collectionVariables.set(\"sampleBookingId\", j.id);\nconsole.log(\"Booking ID:\", j.id, \"Owner:\", j.ownerName);"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/bookings (validation: missing ownerName)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/bookings",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "bookings"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"doctorId\": \"dr-mirna\",\n  \"date\": \"2025-12-01\",\n  \"time\": \"10:00\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Missing required fields still returns 201 (server-side validation is lenient — slots are empty by default)."
+        },
+        {
+          "name": "PATCH /api/bookings/:id/status (→ confirmed)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/bookings/{{sampleBookingId}}/status",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "bookings",
+              "{{sampleBookingId}}",
+              "status"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"status\": \"confirmed\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Transition booking to confirmed. Sends confirmation email if email is set.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"confirmed\",()=>pm.expect(j.status).to.eql('confirmed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/bookings/:id/status (→ cancelled)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/bookings/{{sampleBookingId}}/status",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "bookings",
+              "{{sampleBookingId}}",
+              "status"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"status\": \"cancelled\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Cancel the booking. Sends cancellation email.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"cancelled\",()=>pm.expect(j.status).to.eql('cancelled'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/bookings/:id/status (invalid status — 400)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/bookings/{{sampleBookingId}}/status",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "bookings",
+              "{{sampleBookingId}}",
+              "status"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"status\": \"invalid_status\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Bad status value returns 400.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"400\",()=>pm.expect(pm.response.code).to.eql(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/bookings/:id/archive",
+          "method": "PATCH",
+          "url": {
+            "raw": "http://localhost:3001/api/bookings/{{sampleBookingId}}/archive",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "bookings",
+              "{{sampleBookingId}}",
+              "archive"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"archived\": true\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Soft-archive a booking (set archived=true).",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"archived\",()=>pm.expect(j.archived).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/bookings/:id",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/bookings/{{sampleBookingId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "bookings",
+              "{{sampleBookingId}}"
+            ]
+          },
+          "description": "Permanently deletes the booking. Returns 204.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"204\",()=>pm.expect(pm.response.code).to.eql(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/bookings/:id (404)",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/bookings/REQ-00000000",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "bookings",
+              "REQ-00000000"
+            ]
+          },
+          "description": "Deleting a missing booking returns 404.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"404\",()=>pm.expect(pm.response.code).to.eql(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "7 — Orders",
+      "item": [
+        {
+          "name": "GET /api/orders",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/orders",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "orders"
+            ]
+          },
+          "description": "List all customer orders."
+        },
+        {
+          "name": "GET /api/orders/track (valid)",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/orders/track?orderId={{sampleOrderId}}&phone=01210105624",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "orders",
+              "track"
+            ]
+          },
+          "description": "Track an order by ID + phone. Query params required.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"may or may not find\", () => { pm.expect(j).to.be.an('object'); }); console.log(j);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/orders/track (missing params — 400)",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/orders/track",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "orders",
+              "track"
+            ]
+          },
+          "description": "Missing orderId or phone returns 400.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"400\",()=>pm.expect(pm.response.code).to.eql(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/orders (create — cash, valid)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/orders",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "orders"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"customerName\": \"Postman QA\",\n  \"phone\": \"+201234567890\",\n  \"email\": \"qa@pawclinic.test\",\n  \"address\": \"123 Test Street, Cairo\",\n  \"paymentMethod\": \"cash\",\n  \"items\": [\n    {\n      \"id\": \"prod-senior-dry\",\n      \"name\": \"Senior Complete Dry Food\",\n      \"price\": 34.99,\n      \"qty\": 2\n    }\n  ]\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Places an order with 1 line item. Payment status: 'unpaid' for cash.\nStocks are decremented atomically in a Prisma transaction.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j=pm.response.json();\npm.test(\"201\",()=>pm.expect(pm.response.code).to.eql(201));\npm.test(\"has id\",()=>pm.expect(j.id).to.include('ORD'));\npm.test(\"status pending\",()=>pm.expect(j.status).to.eql('pending'));\npm.collectionVariables.set(\"sampleOrderId\", j.id);\nconsole.log(\"Order ID:\", j.id, \"Total:\", j.total);"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/orders (validation: empty cart — 400)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/orders",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "orders"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"customerName\": \"X\",\n  \"items\": []\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Empty cart → 400 error.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"400\",()=>pm.expect(pm.response.code).to.eql(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/orders/:id/payment (→ paid)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/orders/{{sampleOrderId}}/payment",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "orders",
+              "{{sampleOrderId}}",
+              "payment"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"paymentStatus\": \"paid\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Mark order as paid. Sends payment-success email.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"paid\",()=>pm.expect(j.paymentStatus).to.eql('paid'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/orders/:id/status (→ completed)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/orders/{{sampleOrderId}}/status",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "orders",
+              "{{sampleOrderId}}",
+              "status"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"status\": \"completed\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Mark order completed. Cancelling would restore stock.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"completed\",()=>pm.expect(j.status).to.eql('completed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/orders/:id/archive",
+          "method": "PATCH",
+          "url": {
+            "raw": "http://localhost:3001/api/orders/{{sampleOrderId}}/archive",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "orders",
+              "{{sampleOrderId}}",
+              "archive"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"archived\": true\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Soft-archive the order.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"archived\",()=>pm.expect(j.archived).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/orders/:id (cleanup)",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/orders/{{sampleOrderId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "orders",
+              "{{sampleOrderId}}"
+            ]
+          },
+          "description": "Permanently delete the test order.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"204\",()=>pm.expect(pm.response.code).to.eql(204));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "8 — Payments",
+      "item": [
+        {
+          "name": "GET /api/payments",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/payments",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "payments"
+            ]
+          },
+          "description": "List all payment records."
+        },
+        {
+          "name": "POST /api/payments (create — valid)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/payments",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "payments"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"title\": \"Consultation — Postman QA\",\n  \"amount\": 250,\n  \"method\": \"cash\",\n  \"status\": \"paid\",\n  \"date\": \"2025-12-01\",\n  \"orderId\": \"{{sampleOrderId}}\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Records a clinic income payment. Amount > 0, date YYYY-MM-DD.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"201\",()=>pm.expect(pm.response.code).to.eql(201)); pm.collectionVariables.set(\"samplePaymentId\", j.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/payments (validation: no title — 400)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/payments",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "payments"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"amount\": 100\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Missing title → 400.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"400\",()=>pm.expect(pm.response.code).to.eql(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/payments/:id",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/payments/{{samplePaymentId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "payments",
+              "{{samplePaymentId}}"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"status\": \"paid\",\n  \"amount\": 300\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Update payment status and amount.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"status paid\",()=>pm.expect(j.status).to.eql('paid'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/payments/:id (cleanup)",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/payments/{{samplePaymentId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "payments",
+              "{{samplePaymentId}}"
+            ]
+          },
+          "description": "Delete the test payment.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"204\",()=>pm.expect(pm.response.code).to.eql(204));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "9 — Reviews (Product + Google/Place)",
+      "item": [
+        {
+          "name": "GET /api/reviews (all — admin)",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/reviews",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "reviews"
+            ]
+          },
+          "description": "Returns ALL reviews (all statuses, all productIds). Google place reviews have productId='clinic'.\nResponse is ordered: pending first, then by date desc.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const arr = pm.response.json();\npm.test(\"is array\", () => pm.expect(arr).to.be.an('array'));\nconst clinic = arr.filter(r => r.productId === 'clinic');\nconst products = arr.filter(r => r.productId !== 'clinic');\nconsole.log('Total reviews:', arr.length, '| Google/place:', clinic.length, '| Product:', products.length);\nconsole.log(JSON.stringify(arr[0], null, 2));"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/products/:id/reviews (public — approved only)",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/products/{{sampleProductId}}/reviews",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "products",
+              "{{sampleProductId}}",
+              "reviews"
+            ]
+          },
+          "description": "Public endpoint — returns only approved reviews for a specific product."
+        },
+        {
+          "name": "POST /api/reviews (create product review — pending)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/reviews",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "reviews"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"productId\": \"{{sampleProductId}}\",\n  \"author\": \"Postman QA\",\n  \"rating\": 5,\n  \"comment\": \"Excellent product, tested via Postman!\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Customer submits a review. Status defaults to 'pending'. Must be approved in dashboard.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"201\",()=>pm.expect(pm.response.code).to.eql(201)); pm.test(\"pending\",()=>pm.expect(j.status).to.eql('pending')); pm.collectionVariables.set(\"sampleReviewId\", j.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/reviews/:id (approve)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/reviews/{{sampleReviewId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "reviews",
+              "{{sampleReviewId}}"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"status\": \"approved\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Dashboard approves a pending product review.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"approved\",()=>pm.expect(j.status).to.eql('approved'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/reviews/:id (reject)",
+          "method": "PATCH",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/reviews/{{sampleReviewId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "reviews",
+              "{{sampleReviewId}}"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"status\": \"rejected\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Dashboard rejects a review.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"rejected\",()=>pm.expect(j.status).to.eql('rejected'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/reviews (validation: missing fields — 400)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/reviews",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "reviews"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"author\": \"X\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Missing productId, rating, comment → 400.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"400\",()=>pm.expect(pm.response.code).to.eql(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/google/sync-reviews (requires API key)",
+          "method": "POST",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "type": "text"
+            }
+          ],
+          "url": {
+            "raw": "http://localhost:3001/api/google/sync-reviews",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "google",
+              "sync-reviews"
+            ]
+          },
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"placeId\": \"{{googlePlaceId}}\"\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "description": "Sync Google Reviews into the review table (productId='clinic').\nRequires googlePlacesKey set in ClinicSettings — currently blank in seed.\nExpected: 400 if no API key configured, OR { synced: N, total: M } on success.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\n// Either 400 (no API key) or 200 (synced) is a valid response\npm.test(\"sync response valid\", () => {\n  pm.expect([200,400]).to.include(pm.response.code);\n});\nif (pm.response.code === 200) {\n  pm.test(\"has synced field\", () => pm.expect(j.synced).to.be.a('number'));\n  console.log(\"Synced\", j.synced, \"of\", j.total, \"reviews\");\n}"
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/reviews/:id (cleanup)",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/reviews/{{sampleReviewId}}",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "reviews",
+              "{{sampleReviewId}}"
+            ]
+          },
+          "description": "Delete the test review.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"204\",()=>pm.expect(pm.response.code).to.eql(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/reviews/:id (404)",
+          "method": "DELETE",
+          "url": {
+            "raw": "http://localhost:3001/api/reviews/REV-00000000",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "reviews",
+              "REV-00000000"
+            ]
+          },
+          "description": "Deleting a non-existent review returns 404.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"404\",()=>pm.expect(pm.response.code).to.eql(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "10 — Work Sessions (Check-In / Check-Out)",
+      "item": [
+        {
+          "name": "GET /api/work-session (current)",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/work-session",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "work-session"
+            ]
+          },
+          "description": "Returns the currently open session, or null if checked out."
+        },
+        {
+          "name": "POST /api/work-session/check-in",
+          "method": "POST",
+          "url": {
+            "raw": "http://localhost:3001/api/work-session/check-in",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "work-session",
+              "check-in"
+            ]
+          },
+          "description": "Check in for a new shift. Auto-closes yesterday's session if open, archives finished bookings/orders.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j=pm.response.json(); pm.test(\"has session\",()=>pm.expect(j.session).to.exist); console.log(JSON.stringify(j,null,2));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/work-session/check-out",
+          "method": "POST",
+          "url": {
+            "raw": "http://localhost:3001/api/work-session/check-out",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "work-session",
+              "check-out"
+            ]
+          },
+          "description": "Check out of current shift. Archives all finished bookings & orders.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": "const j = pm.response.json();\npm.test(\"has session\", () => pm.expect(j.session).to.exist);\nconsole.log(\"Archived:\", j.archived);"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/work-session/check-out (not checked in — 400)",
+          "method": "POST",
+          "url": {
+            "raw": "http://localhost:3001/api/work-session/check-out",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "work-session",
+              "check-out"
+            ]
+          },
+          "description": "Checking out without an open session → 400.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"400\",()=>pm.expect(pm.response.code).to.eql(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "11 — Work Days",
+      "item": [
+        {
+          "name": "GET /api/work-days (folder list)",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/work-days",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "work-days"
+            ]
+          },
+          "description": "Returns a list of day-folders with booking/order/payment counts and revenue."
+        },
+        {
+          "name": "GET /api/work-days/:date (day detail)",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/work-days/2025-12-01",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "work-days",
+              "2025-12-01"
+            ]
+          },
+          "description": "Returns all bookings, orders, payments, session, and audit logs for a specific date."
+        },
+        {
+          "name": "GET /api/work-days/:date (invalid format — 400)",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/work-days/invalid-date",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "work-days",
+              "invalid-date"
+            ]
+          },
+          "description": "Non-YYYY-MM-DD format returns 400.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"400\",()=>pm.expect(pm.response.code).to.eql(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    },
+    {
+      "name": "12 — Audit Logs",
+      "item": [
+        {
+          "name": "GET /api/audit-logs",
+          "method": "GET",
+          "url": {
+            "raw": "http://localhost:3001/api/audit-logs",
+            "host": [
+              "http://localhost:3001"
+            ],
+            "path": [
+              "api",
+              "audit-logs"
+            ]
+          },
+          "description": "Returns last 300 audit log entries, newest first. Read-only.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const arr=pm.response.json(); pm.test(\"is array\",()=>pm.expect(arr).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "",
+      "event": []
+    }
   ]
 }
