@@ -35,6 +35,12 @@ enum PaymentStatus {
   paid
 }
 
+enum StaffRole {
+  admin
+  payroll
+  staff
+}
+
 model Booking {
   id          String        @id @default(cuid())
   ownerName   String
@@ -103,11 +109,12 @@ model ClinicSettings {
 }
 
 model AdminUser {
-  id        Int      @id @default(autoincrement())
-  username  String   @unique
+  id        Int        @id @default(autoincrement())
+  username  String     @unique
   salt      String
   hash      String
-  createdAt DateTime @default(now())
+  role      StaffRole  @default(staff)
+  createdAt DateTime   @default(now())
 }
 
 model Review {

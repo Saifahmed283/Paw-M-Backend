@@ -83,7 +83,30 @@ const REVIEWS = [
   { productId: "prod-reflective-harness", author: "Omar Saleh", rating: 4, comment: "Solid harness, the reflective strips are great for night walks.", status: "pending" },
 ];
 
+const STAFF_ACCOUNTS = [
+  { username: "admin", password: "admin123", role: "admin" },
+  { username: "payroll", password: "payroll123", role: "payroll" },
+  { username: "staff", password: "staff123", role: "staff" },
+];
+
 async function main() {
+  const bcrypt = await import("bcryptjs");
+  const BCRYPT_ROUNDS = 12;
+
+  for (const account of STAFF_ACCOUNTS) {
+    const existing = await prisma.adminUser.findUnique({
+      where: { username: account.username },
+    });
+    if (!existing) {
+      const salt = bcrypt.genSaltSync(BCRYPT_ROUNDS);
+      const hash = bcrypt.hashSync(account.password, salt);
+      await prisma.adminUser.create({
+        data: { username: account.username, salt, hash, role: account.role },
+      });
+      console.log(`[Paw-M] Created staff account: ${account.username} (${account.role})`);
+    }
+  }
+
   for (const doctor of DOCTORS) {
     await prisma.doctor.upsert({
       where: { id: doctor.id },

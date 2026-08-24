@@ -1631,7 +1631,9 @@ app.post("/api/auth/register", async (req, res) => {
       return res.status(409).json({ error: "Staff account already exists." });
     const salt = bcrypt.genSaltSync(BCRYPT_ROUNDS);
     const hash = hashPassword(pass, salt);
-    await prisma.adminUser.create({ data: { username: name, salt, hash } });
+    await prisma.adminUser.create({
+      data: { username: name, salt, hash, role: "staff" },
+    });
     res.json({ configured: true });
   } catch (e) {
     console.error(e);
@@ -1651,8 +1653,8 @@ app.post("/api/auth/login", async (req, res) => {
     if (!user) return res.json({ ok: false });
     const hash = hashPassword(String(password ?? ""), user.salt);
     const ok = constantTimeCompare(hash, user.hash);
-    if (ok) logAudit("login", "", `Staff sign-in: ${name}`);
-    res.json({ ok });
+    if (ok) logAudit("login", "", `Staff sign-in: ${name} [${user.role}]`);
+    res.json({ ok, role: ok ? user.role : undefined });
   } catch (e) {
     console.error("Login error:", e);
     res.status(500).json({ error: "Failed to verify credentials" });

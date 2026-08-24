@@ -1,0 +1,40 @@
+﻿{
+  "info": {
+    "_postman_id": "paw-m-api-v1",
+    "name": "Paw-M API — Full Collection",
+    "description": "Complete Postman collection for the Paw-M Veterinary Clinic backend API (Express + Prisma). Base URL: {{baseUrl}}. Auth: pre-request script logs in and sets x-username / session cookies automatically.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "exporterId": "o0n1k9"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "value", "value": "{{sessionToken}}", "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": { "exec": [""] }
+    },
+    {
+      "listen": "test",
+      "script": { "exec": ["postman.setNextRequest(null);"] }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3001" },
+    { "key": "adminUser", "value": "{{(6)}}_qa" },
+    { "key": "loginUsername", "value": "admin" },
+    { "key": "loginPassword", "value": "admin123" },
+    { "key": "staffUser", "value": "staff" },
+    { "key": "staffPass",  "value": "staff123" },
+    { "key": "payrollUser","value": "payroll" },
+    { "key": "payrollPass","value": "payroll123" },
+    { "key": "prodClientId","value": "REQ-aBcDeF" },
+    { "key": "prodDoctorId","value": "dr-mirna" },
+    { "key": "prodOrderId", "value": "ORD-XyZaBc" },
+    { "key": "prodPaymentId","value": "PAY-123456" },
+    { "key": "googlePlaceId","value": "ChIJ7eN6m8f1VxQRShQLeEdq4pU" }
+  ]
+}
