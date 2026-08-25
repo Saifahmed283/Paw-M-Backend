@@ -20,7 +20,6 @@ const FRONTEND_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:3000",
   "http://127.0.0.1:5173",
-  "https://d375-196-156-78-40.ngrok-free.app",
 ];
 
 const corsMiddleware = cors({
@@ -170,9 +169,63 @@ async function archiveFinishedDayRecords() {
   return { bookings: bookings.length, orders: orders.length };
 }
 
+// Auth middleware
+function authenticateUser(req, res, next) {
+  const userId = req.headers["x-user-id"];
+  const userRole = req.headers["x-user-role"];
+
+  if (!userId || !userRole) {
+    return res.status(401).json({ error: "Unauthorized - missing user credentials" });
+  }
+
+  // Validate that the user exists and the role matches
+  prisma.adminUser
+    .findUnique({ where: { id: parseInt(userId, 10) } })
+    .then((user) => {
+      if (!user) {
+        return res.status(401).json({ error: "Unauthorized - invalid user" });
+      }
+      if (user.role !== userRole) {
+        return res.status(401).json({ error: "Unauthorized - role mismatch" });
+      }
+      // Attach user info to request for use in route handlers
+      req.user = { id: user.id, role: user.role };
+      next();
+    })
+    .catch((err) => {
+      console.error("Auth middleware error:", err);
+      return res.status(500).json({ error: "Internal server error" });
+    });
+}
+
+function requireRole(minRole) {
+  const roleHierarchy = { staff: 0, payroll: 1, admin: 2 };
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const userLevel = roleHierarchy[req.user.role];
+    const requiredLevel = roleHierarchy[minRole];
+    if (userLevel < requiredLevel) {
+      return res.status(403).json({ error: "Forbidden - insufficient permissions" });
+    }
+    next();
+  };
+}
+
+const requireAdmin = requireRole("admin");
+const requirePayrollOrAdmin = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+  if (req.user.role !== "admin" && req.user.role !== "payroll") {
+    return res.status(403).json({ error: "Forbidden - admin or payroll required" });
+  }
+  next();
+};
+const requireStaff = requireRole("staff");
+
 // ── Work sessions ────────────────────────────────────────────────────────────
 
-app.get("/api/work-session", async (_req, res) => {
+app.get("/api/work-session", authenticateUser, requireStaff, async (req, res) => {
   try {
     const session = await prisma.workSession.findFirst({
       where: { endedAt: null },
@@ -231,7 +284,7 @@ app.post("/api/google/sync-reviews", async (req, res) => {
   }
 });
 
-app.post("/api/work-session/check-in", async (_req, res) => {
+app.post("/api/work-session/check-in", authenticateUser, requireStaff, async (req, res) => {
   try {
     const open = await prisma.workSession.findFirst({
       where: { endedAt: null },
@@ -272,7 +325,7 @@ app.post("/api/work-session/check-in", async (_req, res) => {
   }
 });
 
-app.post("/api/work-session/check-out", async (_req, res) => {
+app.post("/api/work-session/check-out", authenticateUser, requireStaff, async (req, res) => {
   try {
     const open = await prisma.workSession.findFirst({
       where: { endedAt: null },
@@ -297,7 +350,7 @@ app.post("/api/work-session/check-out", async (_req, res) => {
   }
 });
 
-app.get("/api/audit-logs", async (_req, res) => {
+app.get("/api/audit-logs", authenticateUser, requireAdmin, async (req, res) => {
   try {
     const logs = await prisma.auditLog.findMany({
       orderBy: { createdAt: "desc" },
@@ -312,7 +365,7 @@ app.get("/api/audit-logs", async (_req, res) => {
 
 // ── Work days ───────────────────────────────────────────────────────────────
 
-app.get("/api/work-days", async (_req, res) => {
+app.get("/api/work-days", authenticateUser, requireStaff, async (req, res) => {
   try {
     const [bookings, orders, payments, sessions] = await Promise.all([
       prisma.booking.findMany({
@@ -384,7 +437,7 @@ app.get("/api/work-days", async (_req, res) => {
   }
 });
 
-app.get("/api/work-days/:date", async (req, res) => {
+app.get("/api/work-days/:date", authenticateUser, requireStaff, async (req, res) => {
   const day = String(req.params.date ?? "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
     return res.status(400).json({ error: "Date must be YYYY-MM-DD." });
@@ -428,7 +481,7 @@ app.get("/api/health", (_req, res) =>
 
 // ── Bookings ────────────────────────────────────────────────────────────────
 
-app.get("/api/bookings", async (_req, res) => {
+app.get("/api/bookings", authenticateUser, requireStaff, async (req, res) => {
   try {
     const bookings = await prisma.booking.findMany({
       orderBy: { createdAt: "desc" },
@@ -471,7 +524,7 @@ app.post("/api/bookings", async (req, res) => {
   }
 });
 
-app.patch("/api/bookings/:id/status", async (req, res) => {
+app.patch("/api/bookings/:id/status", authenticateUser, requireStaff, async (req, res) => {
   const { id } = req.params;
   const { status } = req.body ?? {};
   if (!status || !VALID_STATUSES.includes(status)) {
@@ -529,7 +582,7 @@ app.patch("/api/bookings/:id/status", async (req, res) => {
   }
 });
 
-app.delete("/api/bookings/:id", async (req, res) => {
+app.delete("/api/bookings/:id", authenticateUser, requireStaff, async (req, res) => {
   const { id } = req.params;
   try {
     const existing = await prisma.booking.findUnique({ where: { id } });
@@ -545,7 +598,7 @@ app.delete("/api/bookings/:id", async (req, res) => {
   }
 });
 
-app.patch("/api/bookings/:id/archive", async (req, res) => {
+app.patch("/api/bookings/:id/archive", authenticateUser, requireStaff, async (req, res) => {
   const { id } = req.params;
   const archived = req.body?.archived === true;
   try {
@@ -576,7 +629,7 @@ app.get("/api/doctors", async (_req, res) => {
   }
 });
 
-app.post("/api/doctors", async (req, res) => {
+app.post("/api/doctors", authenticateUser, requireAdmin, async (req, res) => {
   const body = req.body ?? {};
   try {
     const name = String(body.name ?? "").slice(0, 120);
@@ -618,7 +671,7 @@ app.post("/api/doctors", async (req, res) => {
   }
 });
 
-app.patch("/api/doctors/:id", async (req, res) => {
+app.patch("/api/doctors/:id", authenticateUser, requireAdmin, async (req, res) => {
   const { id } = req.params;
   const patch = req.body ?? {};
   const data = {};
@@ -663,7 +716,7 @@ app.patch("/api/doctors/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/doctors/:id", async (req, res) => {
+app.delete("/api/doctors/:id", authenticateUser, requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     const existing = await prisma.doctor.findUnique({ where: { id } });
@@ -691,7 +744,7 @@ app.get("/api/services", async (_req, res) => {
   }
 });
 
-app.post("/api/services", async (req, res) => {
+app.post("/api/services", authenticateUser, requireAdmin, async (req, res) => {
   const body = req.body ?? {};
   try {
     const created = await prisma.service.create({
@@ -717,7 +770,7 @@ app.post("/api/services", async (req, res) => {
   }
 });
 
-app.patch("/api/services/:slug", async (req, res) => {
+app.patch("/api/services/:slug", authenticateUser, requireAdmin, async (req, res) => {
   const { slug } = req.params;
   const patch = req.body ?? {};
   const data = {};
@@ -737,7 +790,7 @@ app.patch("/api/services/:slug", async (req, res) => {
   }
 });
 
-app.delete("/api/services/:slug", async (req, res) => {
+app.delete("/api/services/:slug", authenticateUser, requireAdmin, async (req, res) => {
   const { slug } = req.params;
   try {
     const existing = await prisma.service.findUnique({ where: { slug } });
@@ -809,7 +862,7 @@ app.get("/api/products/:id", async (req, res) => {
   }
 });
 
-app.post("/api/products", async (req, res) => {
+app.post("/api/products", authenticateUser, requireAdmin, async (req, res) => {
   const body = req.body ?? {};
   const price = Number(body.price ?? 0);
   const stock = Number(body.stock ?? 0);
@@ -857,7 +910,7 @@ app.post("/api/products", async (req, res) => {
   }
 });
 
-app.patch("/api/products/:id", async (req, res) => {
+app.patch("/api/products/:id", authenticateUser, requireAdmin, async (req, res) => {
   const { id } = req.params;
   const patch = req.body ?? {};
   const data = {};
@@ -908,7 +961,7 @@ app.patch("/api/products/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/products/:id", async (req, res) => {
+app.delete("/api/products/:id", authenticateUser, requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     const existing = await prisma.product.findUnique({ where: { id } });
@@ -932,7 +985,7 @@ function fawryReference() {
   return `PAW-${out}`;
 }
 
-app.get("/api/orders", async (_req, res) => {
+app.get("/api/orders", authenticateUser, requireStaff, async (req, res) => {
   try {
     const orders = await prisma.order.findMany({
       orderBy: { createdAt: "desc" },
@@ -1072,7 +1125,7 @@ app.post("/api/orders", async (req, res) => {
   }
 });
 
-app.post("/api/orders/:id/payment-proof", async (req, res) => {
+app.post("/api/orders/:id/payment-proof", authenticateUser, requireStaff, async (req, res) => {
   const { id } = req.params;
   const body = req.body ?? {};
   const paymentRef = String(body.paymentRef ?? "").trim();
@@ -1115,7 +1168,7 @@ app.post("/api/orders/:id/payment-proof", async (req, res) => {
   }
 });
 
-app.patch("/api/orders/:id/payment", async (req, res) => {
+app.patch("/api/orders/:id/payment", authenticateUser, requireStaff, async (req, res) => {
   const { id } = req.params;
   const { paymentStatus } = req.body ?? {};
   if (!VALID_PAYMENT_STATUSES.includes(paymentStatus)) {
@@ -1180,7 +1233,7 @@ app.patch("/api/orders/:id/payment", async (req, res) => {
   }
 });
 
-app.patch("/api/orders/:id/status", async (req, res) => {
+app.patch("/api/orders/:id/status", authenticateUser, requireStaff, async (req, res) => {
   const { id } = req.params;
   const { status } = req.body ?? {};
   if (!status || !VALID_ORDER_STATUSES.includes(status)) {
@@ -1242,7 +1295,7 @@ app.patch("/api/orders/:id/status", async (req, res) => {
   }
 });
 
-app.delete("/api/orders/:id", async (req, res) => {
+app.delete("/api/orders/:id", authenticateUser, requireStaff, async (req, res) => {
   const { id } = req.params;
   try {
     const existing = await prisma.order.findUnique({ where: { id } });
@@ -1258,7 +1311,7 @@ app.delete("/api/orders/:id", async (req, res) => {
   }
 });
 
-app.patch("/api/orders/:id/archive", async (req, res) => {
+app.patch("/api/orders/:id/archive", authenticateUser, requireStaff, async (req, res) => {
   const { id } = req.params;
   const archived = req.body?.archived === true;
   try {
@@ -1279,7 +1332,7 @@ app.patch("/api/orders/:id/archive", async (req, res) => {
 
 // ── Payments ────────────────────────────────────────────────────────────────
 
-app.get("/api/payments", async (_req, res) => {
+app.get("/api/payments", authenticateUser, requireStaff, async (req, res) => {
   try {
     const payments = await prisma.payment.findMany({
       orderBy: { createdAt: "desc" },
@@ -1290,7 +1343,7 @@ app.get("/api/payments", async (_req, res) => {
   }
 });
 
-app.post("/api/payments", async (req, res) => {
+app.post("/api/payments", authenticateUser, requireStaff, async (req, res) => {
   const body = req.body ?? {};
   const title = String(body.title ?? "")
     .trim()
@@ -1337,7 +1390,7 @@ app.post("/api/payments", async (req, res) => {
   }
 });
 
-app.patch("/api/payments/:id", async (req, res) => {
+app.patch("/api/payments/:id", authenticateUser, requireStaff, async (req, res) => {
   const { id } = req.params;
   const body = req.body ?? {};
   const patch = {};
@@ -1588,6 +1641,1105 @@ app.patch("/api/settings", async (req, res) => {
   }
 });
 
+// Extended API Routes (Employees, Payroll, Tasks, etc.)
+// =============================================================================
+
+// Employees
+app.get("/api/employees", authenticateUser, requireAdmin, async (_req, res) => {
+  try {
+    const employees = await prisma.employee.findMany({
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        phone: true,
+        role: true,
+        payRateType: true,
+        hourlyRate: true,
+        monthlySalary: true,
+        roleHoursPerDay: true,
+        commissionRates: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { fullName: "asc" },
+    });
+    res.json(employees);
+  } catch (error) {
+    console.error("Error fetching employees:", error);
+    res.status(500).json({ error: "Failed to fetch employees" });
+  }
+});
+
+app.get("/api/employees/:id", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const employee = await prisma.employee.findUnique({
+      where: { id: parseInt(req.params.id) },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        phone: true,
+        role: true,
+        payRateType: true,
+        hourlyRate: true,
+        monthlySalary: true,
+        roleHoursPerDay: true,
+        commissionRates: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!employee) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+    res.json(employee);
+  } catch (error) {
+    console.error("Error fetching employee:", error);
+    res.status(500).json({ error: "Failed to fetch employee" });
+  }
+});
+
+app.post("/api/employees", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const {
+      fullName,
+      email,
+      phone,
+      role,
+      payRateType,
+      hourlyRate,
+      monthlySalary,
+      roleHoursPerDay,
+      commissionRates,
+      isActive,
+    } = req.body;
+
+    // Validate required fields
+    if (!fullName || !email || !role) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const employee = await prisma.employee.create({
+      data: {
+        fullName,
+        email,
+        phone: phone || null,
+        role,
+        payRateType: payRateType || "hourly",
+        hourlyRate: parseFloat(hourlyRate) || 0,
+        monthlySalary: parseFloat(monthlySalary) || 0,
+        roleHoursPerDay: parseInt(roleHoursPerDay) || 8,
+        commissionRates: commissionRates || {},
+        isActive: isActive !== undefined ? isActive : true,
+      },
+    });
+    res.status(201).json(employee);
+  } catch (error) {
+    console.error("Error creating employee:", error);
+    if (error.code === "P2002") {
+      return res.status(400).json({ error: "Employee with this email already exists" });
+    }
+    res.status(500).json({ error: "Failed to create employee" });
+  }
+});
+
+app.patch("/api/employees/:id", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const employeeId = parseInt(req.params.id);
+    const {
+      fullName,
+      email,
+      phone,
+      role,
+      payRateType,
+      hourlyRate,
+      monthlySalary,
+      roleHoursPerDay,
+      commissionRates,
+      isActive,
+    } = req.body;
+
+    // Check if employee exists
+    const existing = await prisma.employee.findUnique({
+      where: { id: employeeId },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+
+    // Validate email uniqueness if changing
+    if (email && email !== existing.email) {
+      const emailExists = await prisma.employee.findFirst({
+        where: { email, NOT: { id: employeeId } },
+      });
+      if (emailExists) {
+        return res.status(400).json({ error: "Email already in use" });
+      }
+    }
+
+    const employee = await prisma.employee.update({
+      where: { id: employeeId },
+      data: {
+        fullName: fullName !== undefined ? fullName : undefined,
+        email: email !== undefined ? email : undefined,
+        phone: phone !== undefined ? phone : null,
+        role: role !== undefined ? route : undefined,
+        payRateType: payRateType !== undefined ? payRateType : undefined,
+        hourlyRate: hourlyRate !== undefined ? parseFloat(hourlyRate) : undefined,
+        monthlySalary: monthlySalary !== undefined ? parseFloat(monthlySalary) : undefined,
+        roleHoursPerDay: roleHoursPerDay !== undefined ? parseInt(roleHoursPerDay) : undefined,
+        commissionRates: commissionRates !== undefined ? commissionRates : undefined,
+        isActive: isActive !== undefined ? isActive : undefined,
+        updatedAt: new Date(),
+      },
+    });
+    res.json(employee);
+  } catch (error) {
+    console.error("Error updating employee:", error);
+    if (error.code === "P2002") {
+      return res.status(400).json({ error: "Email already in use" });
+    }
+    res.status(500).json({ error: "Failed to update employee" });
+  }
+});
+
+app.delete("/api/employees/:id", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const employeeId = parseInt(req.params.id);
+    
+    // Check if employee exists
+    const existing = await prisma.employee.findUnique({
+      where: { id: employeeId },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+
+    // Soft delete by setting isActive to false
+    const employee = await prisma.employee.update({
+      where: { id: employeeId },
+      data: { isActive: false, updatedAt: new Date() },
+    });
+    res.json({ message: "Employee deactivated successfully" });
+  } catch (error) {
+    console.error("Error deleting employee:", error);
+    res.status(500).json({ error: "Failed to deactivate employee" });
+  }
+});
+
+// Extended WorkSessions with KPI
+app.get("/api/work-sessions/me", authenticateUser, requireStaff, async (req, res) => {
+  try {
+    const sessions = await prisma.workSession.findMany({
+      where: { employeeId: req.user.id },
+      orderBy: { startedAt: "desc" },
+      take: 50, // Limit to recent 50 sessions
+    });
+    res.json(sessions);
+  } catch (error) {
+    console.error("Error fetching work sessions:", error);
+    res.status(500).json({ error: "Failed to fetch work sessions" });
+  }
+});
+
+app.get("/api/work-sessions/me/kpi", authenticateUser, requireStaff, async (req, res) => {
+  try {
+    const { periodStart, periodEnd } = req.query;
+    if (!periodStart || !periodEnd) {
+      return res.status(400).json({ error: "Missing periodStart or periodEnd" });
+    }
+
+    const sessions = await prisma.workSession.findMany({
+      where: {
+        employeeId: req.user.id,
+        date: {
+          gte: periodStart,
+          lte: periodEnd,
+        },
+      },
+    });
+
+    const totals = sessions.reduce(
+      (acc, session) => ({
+        sessions: acc.sessions + 1,
+        hours: acc.hours + ((session.endedAt && session.startedAt) ? (session.endedAt.getTime() - session.startedAt.getTime()) / (1000 * 60 * 60) : 0),
+        bookings: acc.bookings + session.bookingsCount,
+        orders: acc.orders + session.ordersCount,
+        revenue: acc.revenue + session.revenueTotal,
+        commission: acc.commission + session.commissionTotal,
+      }),
+      { sessions: 0, hours: 0, bookings: 0, orders: 0, revenue: 0, commission: 0 }
+    );
+
+    // Calculate base pay from hourly rate
+    const employee = await prisma.employee.findUnique({
+      where: { id: req.user.id },
+      select: { hourlyRate: true, monthlySalary: true, payRateType: true },
+    });
+
+    let basePay = 0;
+    if (employee) {
+      if (employee.payRateType === "monthly") {
+        // Calculate monthly equivalent for the period
+        const daysInPeriod = (new Date(periodEnd) - new Date(periodStart)) / (1000 * 60 * 60 * 24) + 1;
+        basePay = (employee.monthlySalary / 30) * daysInPeriod;
+      } else {
+        basePay = totals.hours * employee.hourlyRate;
+      }
+    }
+
+    res.json({
+      ...totals,
+      basePay: parseFloat(basePay.toFixed(2)),
+      grossPay: parseFloat((totals.commission + basePay).toFixed(2)),
+    });
+  } catch (error) {
+    console.error("Error calculating work session KPI:", error);
+    res.status(500).json({ error: "Failed to calculate KPI" });
+  }
+});
+
+app.get("/api/work-sessions/all", authenticateUser, requireAdmin, async (_req, res) => {
+  try {
+    const sessions = await prisma.workSession.findMany({
+      include: {
+        employee: {
+          select: {
+            id: true,
+            fullName: true,
+            role: true,
+          },
+        },
+      },
+      orderBy: { startedAt: "desc" },
+      take: 100,
+    });
+    res.json(sessions);
+  } catch (error) {
+    console.error("Error fetching all work sessions:", error);
+    res.status(500).json({ error: "Failed to fetch work sessions" });
+  }
+});
+
+app.get("/api/work-sessions/admin/kpi", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const { userId, periodStart, periodEnd } = req.query;
+    if (!userId || !periodStart || !periodEnd) {
+      return res.status(400).json({ error: "Missing userId, periodStart, or periodEnd" });
+    }
+
+    const sessions = await prisma.workSession.findMany({
+      where: {
+        employeeId: parseInt(userId),
+        date: {
+          gte: periodStart,
+          lte: periodEnd,
+        },
+      },
+    });
+
+    const totals = sessions.reduce(
+      (acc, session) => ({
+        sessions: acc.sessions + 1,
+        hours: acc.hours + ((session.endedAt && session.startedAt) ? (session.endedAt.getTime() - session.startedAt.getTime()) / (1000 * 60 * 60) : 0),
+        bookings: acc.bookings + session.bookingsCount,
+        orders: acc.orders + session.ordersCount,
+        revenue: acc.revenue + session.revenueTotal,
+        commission: acc.commission + session.commissionTotal,
+      }),
+      { sessions: 0, hours: 0, bookings: 0, orders: 0, revenue: 0, commission: 0 }
+    );
+
+    // Get employee details
+    const employee = await prisma.employee.findUnique({
+      where: { id: parseInt(userId) },
+      select: {
+        fullName: true,
+        hourlyRate: true,
+        monthlySalary: true,
+        payRateType: true,
+      },
+    });
+
+    let basePay = 0;
+    if (employee) {
+      if (employee.payRateType === "monthly") {
+        const daysInPeriod = (new Date(periodEnd) - new Date(periodStart)) / (1000 * 60 * 60 * 24) + 1;
+        basePay = (employee.monthlySalary / 30) * daysInPeriod;
+      } else {
+        basePay = totals.hours * employee.hourlyRate;
+      }
+    }
+
+    res.json({
+      employeeId: parseInt(userId),
+      employeeName: employee?.fullName || "Unknown",
+      ...totals,
+      basePay: parseFloat(basePay.toFixed(2)),
+      grossPay: parseFloat((totals.commission + basePay).toFixed(2)),
+    });
+  } catch (error) {
+    console.error("Error calculating admin work session KPI:", error);
+    res.status(500).json({ error: "Failed to calculate KPI" });
+  }
+});
+
+app.patch("/api/work-sessions/:id/kpi", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    const { bookingsCount, ordersCount, revenueTotal, commissionTotal } = req.body;
+
+    const session = await prisma.workSession.update({
+      where: { id: sessionId },
+      data: {
+        bookingsCount: bookingsCount !== undefined ? bookingsCount : undefined,
+        ordersCount: ordersCount !== undefined ? ordersCount : undefined,
+        revenueTotal: revenueTotal !== undefined ? parseFloat(revenueTotal) : undefined,
+        commissionTotal: commissionTotal !== undefined ? parseFloat(commissionTotal) : undefined,
+        updatedAt: new Date(),
+      },
+    });
+    res.json(session);
+  } catch (error) {
+    console.error("Error updating work session KPI:", error);
+    res.status(500).json({ error: "Failed to update work session" });
+  }
+});
+
+// Payroll
+app.post("/api/payroll/calculate", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
+  try {
+    const { periodStart, periodEnd } = req.body;
+    if (!periodStart || !periodEnd) {
+      return res.status(400).json({ error: "Missing periodStart or periodEnd" });
+    }
+
+    // Get all employees with sessions in the period
+    const employees = await prisma.employee.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        fullName: true,
+        role: true,
+        hourlyRate: true,
+        monthlySalary: true,
+        payRateType: true,
+      },
+    });
+
+    const payrollRecords = [];
+
+    for (const employee of employees) {
+      // Get work sessions for this employee in the period
+      const sessions = await prisma.workSession.findMany({
+        where: {
+          employeeId: employee.id,
+          date: {
+            gte: periodStart,
+            lte: periodEnd,
+          },
+        },
+        orderBy: { startedAt: "asc" },
+      });
+
+      if (sessions.length === 0) continue;
+
+      // Calculate totals
+      const totals = sessions.reduce(
+        (acc, session) => ({
+          sessions: acc.sessions + 1,
+          hours: acc.hours + ((session.endedAt && session.startedAt) ? (session.endedAt.getTime() - session.startedAt.getTime()) / (1000 * 60 * 60) : 0),
+          bookings: acc.bookings + session.bookingsCount,
+          orders: acc.orders + session.ordersCount,
+          revenue: acc.revenue + session.revenueTotal,
+          commission: acc.commission + session.commissionTotal,
+        }),
+        { sessions: 0, hours: 0, bookings: 0, orders: 0, revenue: 0, commission: 0 }
+      );
+
+      // Calculate base pay
+      let basePay = 0;
+      if (employee.payRateType === "monthly") {
+        const daysInPeriod = (new Date(periodEnd) - new Date(periodStart)) / (1000 * 60 * 60 * 24) + 1;
+        basePay = (employee.monthlySalary / 30) * daysInPeriod;
+      } else {
+        basePay = totals.hours * employee.hourlyRate;
+      }
+
+      // Calculate commission pay from commissionRates
+      let commissionPay = 0;
+      if (employee.commissionRates && Object.keys(employee.commissionRates).length > 0) {
+        // This is simplified - in reality you'd need to track which services were performed
+        // For now, we'll use the commissionTotal from work sessions
+        commissionPay = totals.commission;
+      }
+
+      const totalBonuses = 0; // Will be calculated from approved bonus requests
+      const totalDeductions = 0; // Will be calculated from approved deduction requests
+      const netPay = basePay + commissionPay + totalBonuses - totalDeductions;
+
+      const breakdown = sessions.map(session => ({
+        sessionId: session.id,
+        date: session.date,
+        hours: session.endedAt && session.startedAt ? (session.endedAt.getTime() - session.startedAt.getTime()) / (1000 * 60 * 60) : 0,
+        bookings: session.bookingsCount,
+        orders: session.ordersCount,
+        revenue: session.revenueTotal,
+        basePay: session.endedAt && session.startedAt 
+          ? ((session.endedAt.getTime() - session.startedAt.getTime()) / (1000 * 60 * 60)) * employee.hourlyRate 
+          : 0,
+        commission: session.commissionTotal,
+      }));
+
+      payrollRecords.push({
+        employeeId: employee.id,
+        periodStart,
+        periodEnd,
+        totalSessions: totals.sessions,
+        totalHours: parseFloat(totals.hours.toFixed(2)),
+        totalBookings: totals.bookings,
+        totalOrders: totals.orders,
+        totalRevenue: parseFloat(totals.revenue.toFixed(2)),
+        basePay: parseFloat(basePay.toFixed(2)),
+        commissionPay: parseFloat(commissionPay.toFixed(2)),
+        totalBonuses: parseFloat(totalBonuses.toFixed(2)),
+        totalDeductions: parseFloat(totalDeductions.toFixed(2)),
+        netPay: parseFloat(netPay.toFixed(2)),
+        status: "calculated",
+        calculatedBy: req.user.id.toString(),
+        breakdown,
+      });
+    }
+
+    // Save all payroll records
+    const savedRecords = await prisma.$transaction(
+      payrollRecords.map(record => 
+        prisma.payrollRecord.create({ data: record })
+      )
+    );
+
+    res.json({ records: savedRecords, count: savedRecords.length });
+  } catch (error) {
+    console.error("Error calculating payroll:", error);
+    res.status(500).json({ error: "Failed to calculate payroll" });
+  }
+});
+
+app.get("/api/payroll/records", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
+  try {
+    const { employeeId, periodStart, periodEnd, status } = req.query;
+
+    const where = {};
+    if (employeeId) where.employeeId = parseInt(employeeId);
+    if (periodStart) where.periodStart = { gte: periodStart };
+    if (periodEnd) where.periodEnd = { lte: periodEnd };
+    if (status) where.status = status;
+
+    const records = await prisma.payrollRecord.findMany({
+      where,
+      include: {
+        employee: {
+          select: {
+            id: true,
+            fullName: true,
+            role: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(records);
+  } catch (error) {
+    console.error("Error fetching payroll records:", error);
+    res.status(500).json({ error: "Failed to fetch payroll records" });
+  }
+});
+
+app.get("/api/payroll/records/:id", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
+  try {
+    const record = await prisma.payrollRecord.findUnique({
+      where: { id: parseInt(req.params.id) },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            fullName: true,
+            role: true,
+          },
+        },
+      },
+    });
+    if (!record) {
+      return res.status(404).json({ error: "Payroll record not found" });
+    }
+    res.json(record);
+  } catch (error) {
+    console.error("Error fetching payroll record:", error);
+    res.status(500).json({ error: "Failed to fetch payroll record" });
+  }
+});
+
+app.patch("/api/payroll/records/:id/status", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const { status } = req.body;
+if (!status || !["calculated", "pending_approval", "approved", "paid", "rejected"].includes(status)) {
+       return res.status(400).json({ error: "Invalid status" });
+     }
+
+    const record = await prisma.payrollRecord.update({
+      where: { id: parseInt(req.params.id) },
+      data: {
+        status,
+        ...(status === "approved" ? { approvedBy: req.user.id.toString(), approvedAt: new Date() } : {}),
+        ...(status === "paid" ? { paidAt: new Date() } : {}),
+      },
+    });
+    res.json(record);
+  } catch (error) {
+    console.error("Error updating payroll record status:", error);
+    res.status(500).json({ error: "Failed to update payroll record" });
+  }
+});
+
+app.patch("/api/payroll/records/:id/amount", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const { basePay, commissionPay, totalBonuses, totalDeductions } = req.body;
+    const updateData = {};
+
+    if (basePay !== undefined) updateData.basePay = parseFloat(basePay);
+    if (commissionPay !== undefined) updateData.commissionPay = parseFloat(commissionPay);
+    if (totalBonuses !== undefined) updateData.totalBonuses = parseFloat(totalBonuses);
+    if (totalDeductions !== undefined) updateData.totalDeductions = parseFloat(totalDeductions);
+    if (basePay !== undefined || commissionPay !== undefined || totalBonuses !== undefined || totalDeductions !== undefined) {
+      // Recalculate net pay
+      const record = await prisma.payrollRecord.findUnique({
+        where: { id: parseInt(req.params.id) },
+      });
+      if (record) {
+        const netPay = (updateData.basePay ?? record.basePay) + 
+                      (updateData.commissionPay ?? record.commissionPay) + 
+                      (updateData.totalBonuses ?? record.totalBonuses) - 
+                      (updateData.totalDeductions ?? record.totalDeductions);
+        updateData.netPay = parseFloat(netPay.toFixed(2));
+      }
+    }
+
+    const record = await prisma.payrollRecord.update({
+      where: { id: parseInt(req.params.id) },
+      data: updateData,
+    });
+    res.json(record);
+  } catch (error) {
+    console.error("Error updating payroll record amount:", error);
+    res.status(500).json({ error: "Failed to update payroll record" });
+  }
+});
+
+// Bonus/Deduction Requests
+app.post("/api/payroll/:recordId/bonus-request", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
+  try {
+    const recordId = parseInt(req.params.recordId);
+    const { amount, reason, workSessionId } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: "Valid amount required" });
+    }
+    if (!reason || reason.trim() === "") {
+      return res.status(400).json({ error: "Reason is required" });
+    }
+
+    // Verify the payroll record exists
+    const payrollRecord = await prisma.payrollRecord.findUnique({
+      where: { id: recordId },
+      include: { employee: true },
+    });
+    if (!payrollRecord) {
+      return res.status(404).json({ error: "Payroll record not found" });
+    }
+
+    // Verify that the payroll record belongs to the employee making the request (for payroll staff)
+    // Admin can request for any employee
+    if (req.user.role === "payroll" && payrollRecord.employeeId !== req.user.id) {
+      return res.status(403).json({ error: "Forbidden - can only request bonuses for your own employees" });
+    }
+
+    const bonusRequest = await prisma.bonusDeductionRequest.create({
+      data: {
+        type: "bonus",
+        employeeId: payrollRecord.employeeId,
+        payrollRecordId: recordId,
+        amount: parseFloat(amount),
+        reason: reason.trim(),
+        workSessionId: workSessionId || null,
+        requestedBy: req.user.id.toString(),
+        status: "pending",
+      },
+    });
+    res.status(201).json(bonusRequest);
+  } catch (error) {
+    console.error("Error creating bonus request:", error);
+    res.status(500).json({ error: "Failed to create bonus request" });
+  }
+});
+
+app.post("/api/payroll/:recordId/deduction-request", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
+  try {
+    const recordId = parseInt(req.params.recordId);
+    const { amount, reason, workSessionId } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: "Valid amount required" });
+    }
+    if (!reason || reason.trim() === "") {
+      return res.status(400).json({ error: "Reason is required" });
+    }
+
+    // Verify the payroll record exists
+    const payrollRecord = await prisma.payrollRecord.findUnique({
+      where: { id: recordId },
+      include: { employee: true },
+    });
+    if (!payrollRecord) {
+      return res.status(404).json({ error: "Payroll record not found" });
+    }
+
+    // Verify that the payroll record belongs to the employee making the request (for payroll staff)
+    // Admin can request for any employee
+    if (req.user.role === "payroll" && payrollRecord.employeeId !== req.user.id) {
+      return res.status(403).json({ error: "Forbidden - can only request deductions for your own employees" });
+    }
+
+    const deductionRequest = await prisma.bonusDeductionRequest.create({
+      data: {
+        type: "deduction",
+        employeeId: payrollRecord.employeeId,
+        payrollRecordId: recordId,
+        amount: parseFloat(amount),
+        reason: reason.trim(),
+        workSessionId: workSessionId || null,
+        requestedBy: req.user.id.toString(),
+        status: "pending",
+      },
+    });
+    res.status(201).json(deductionRequest);
+  } catch (error) {
+    console.error("Error creating deduction request:", error);
+    res.status(500).json({ error: "Failed to create deduction request" });
+  }
+});
+
+app.get("/api/payroll/:recordId/requests", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const recordId = parseInt(req.params.recordId);
+    const { type } = req.query; // Optional filter by type: "bonus" or "deduction"
+
+    const where = { payrollRecordId: recordId };
+    if (type) where.type = type;
+
+    const requests = await prisma.bonusDeductionRequest.findMany({
+      where,
+      include: {
+        employee: {
+          select: {
+            id: true,
+            fullName: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(requests);
+  } catch (error) {
+    console.error("Error fetching bonus/deduction requests:", error);
+    res.status(500).json({ error: "Failed to fetch requests" });
+  }
+});
+
+app.patch("/api/payroll/requests/:requestId", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const requestId = parseInt(req.params.requestId);
+    const { status, adminComment } = req.body;
+
+    if (!status || !["approved", "rejected"].includes(status)) {
+      return res.status(400).json({ error: "Invalid status - must be 'approved' or 'rejected'" });
+    }
+
+    const request = await prisma.bonusDeductionRequest.findUnique({
+      where: { id: requestId },
+      include: {
+        payrollRecord: true,
+      },
+    });
+    if (!request) {
+      return res.status(404).json({ error: "Request not found" });
+    }
+
+    // Update the request
+    const updatedRequest = await prisma.bonusDeductionRequest.update({
+      where: { id: requestId },
+      data: {
+        status,
+        reviewedBy: req.user.id.toString(),
+        reviewedAt: new Date(),
+        adminComment: adminComment || null,
+      },
+    });
+
+    // If approved, we need to update the payroll record's bonus/deduction totals
+    if (status === "approved") {
+      // Recalculate totals for the payroll record
+      const approvedRequests = await prisma.bonusDeductionRequest.findMany({
+        where: {
+          payrollRecordId: request.payrollRecordId,
+          status: "approved",
+        },
+      });
+
+      const totalBonuses = approvedRequests
+        .filter(r => r.type === "bonus")
+        .reduce((sum, r) => sum + r.amount, 0);
+      const totalDeductions = approvedRequests
+        .filter(r => r.type === "deduction")
+        .reduce((sum, r) => sum + r.amount, 0);
+
+      await prisma.payrollRecord.update({
+        where: { id: request.payrollRecordId },
+        data: {
+          totalBonuses: parseFloat(totalBonuses.toFixed(2)),
+          totalDeductions: parseFloat(totalDeductions.toFixed(2)),
+          netPay: parseFloat(
+            (request.payrollRecord.basePay + 
+             request.payrollRecord.commissionPay + 
+             totalBonuses - 
+             totalDeductions).toFixed(2)
+          ),
+        },
+      });
+    }
+
+    res.json(updatedRequest);
+  } catch (error) {
+    console.error("Error updating bonus/deduction request:", error);
+    res.status(500).json({ error: "Failed to update request" });
+  }
+});
+
+// Tasks
+app.post("/api/tasks", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const {
+      title,
+      description,
+      priority,
+      status,
+      dueDate,
+      assignedToId,
+    } = req.body;
+
+    if (!title || !assignedToId) {
+      return res.status(400).json({ error: "Title and assignedToId are required" });
+    }
+
+    // Verify assignedToId exists
+    const employee = await prisma.employee.findUnique({
+      where: { id: parseInt(assignedToId) },
+    });
+    if (!employee) {
+      return res.status(400).json({ error: "Assigned employee not found" });
+    }
+
+    const task = await prisma.adminTask.create({
+      data: {
+        title,
+        description: description || null,
+        priority: priority || "medium",
+        status: status || "open",
+        dueDate: dueDate || null,
+        assignedBy: req.user.id.toString(),
+        assignedToId: parseInt(assignedToId),
+      },
+    });
+    res.status(201).json(task);
+  } catch (error) {
+    console.error("Error creating task:", error);
+    res.status(500).json({ error: "Failed to create task" });
+  }
+});
+
+app.get("/api/tasks/mine", authenticateUser, requireStaff, async (req, res) => {
+  try {
+    const tasks = await prisma.adminTask.findMany({
+      where: { assignedToId: req.user.id },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(tasks);
+  } catch (error) {
+    console.error("Error fetching tasks:", error);
+    res.status(500).json({ error: "Failed to fetch tasks" });
+  }
+});
+
+app.get("/api/tasks/all", authenticateUser, requireAdmin, async (_req, res) => {
+  try {
+    const tasks = await prisma.adminTask.findMany({
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(tasks);
+  } catch (error) {
+    console.error("Error fetching all tasks:", error);
+    res.status(500).json({ error: "Failed to fetch tasks" });
+  }
+});
+
+app.patch("/api/tasks/:id", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const taskId = parseInt(req.params.id);
+    const {
+      title,
+      description,
+      priority,
+      status,
+      dueDate,
+      assignedToId,
+    } = req.body;
+
+    // Verify task exists
+    const existing = await prisma.adminTask.findUnique({
+      where: { id: taskId },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    // Verify assignedToId exists if changing
+    if (assignedToId) {
+      const employee = await prisma.employee.findUnique({
+        where: { id: parseInt(assignedToId) },
+      });
+      if (!employee) {
+        return res.status(400).json({ error: "Assigned employee not found" });
+      }
+    }
+
+    const task = await prisma.adminTask.update({
+      where: { id: taskId },
+      data: {
+        title: title !== undefined ? title : undefined,
+        description: description !== undefined ? description : null,
+        priority: priority !== undefined ? priority : undefined,
+        status: status !== undefined ? status : undefined,
+        dueDate: dueDate !== undefined ? dueDate : null,
+        assignedToId: assignedToId !== undefined ? parseInt(assignedToId) : undefined,
+        updatedAt: new Date(),
+      },
+    });
+    res.json(task);
+  } catch (error) {
+    console.error("Error updating task:", error);
+    res.status(500).json({ error: "Failed to update task" });
+  }
+});
+
+app.patch("/api/tasks/:id/status", authenticateUser, requireStaff, async (req, res) => {
+  try {
+    const taskId = parseInt(req.params.id);
+    const { status } = req.body;
+
+    if (!status || !["open", "in_progress", "completed", "cancelled"].includes(status)) {
+      return res.status(400).json({ error: "Invalid status" });
+    }
+
+    // Verify task exists and is assigned to the current user
+    const task = await prisma.adminTask.findUnique({
+      where: { id: taskId, assignedToId: req.user.id },
+    });
+    if (!task) {
+      return res.status(404).json({ error: "Task not found or not assigned to you" });
+    }
+
+    const updatedTask = await prisma.adminTask.update({
+      where: { id: taskId },
+      data: { status, updatedAt: new Date() },
+    });
+    res.json(updatedTask);
+  } catch (error) {
+    console.error("Error updating task status:", error);
+    res.status(500).json({ error: "Failed to update task status" });
+  }
+});
+
+// Notifications
+app.get("/api/notifications/me", authenticateUser, async (req, res) => {
+  try {
+    const notifications = await prisma.notion.findMany({
+      where: {
+        OR: [
+          { targetUserId: req.user.id }, // Directly targeted
+          { targetUserId: null }, // Broadcast to all
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(notifications);
+  } catch (error) {
+    console.error("Error fetching notifications:", error);
+    res.status(500).json({ error: "Failed to fetch notifications" });
+  }
+});
+
+app.patch("/api/notifications/:id/read", authenticateUser, async (req, res) => {
+  try {
+    const notificationId = parseInt(req.params.id);
+    
+    // Get the notification
+    const notification = await prisma.notification.findUnique({
+      where: { id: notificationId },
+    });
+    if (!notification) {
+      return res.status(404).json({ error: "Notification not found" });
+    }
+
+    // Add user ID to readBy array if not already there
+    const readBy = notification.readBy || [];
+    const userIdStr = req.user.id.toString();
+    if (!readBy.includes(userIdStr)) {
+      readBy.push(userIdStr);
+      
+      await prisma.notification.update({
+        where: { id: notificationId },
+        data: { readBy },
+      });
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error marking notification as read:", error);
+    res.status(500).json({ error: "Failed to mark notification as read" });
+  }
+});
+
+app.post("/api/notifications/broadcast", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const { type, title, body, data } = req.body;
+
+    if (!type || !title || !body) {
+      return res.status(400).json({ error: "Type, title, and body are required" });
+    }
+
+    const notification = await prisma.notification.create({
+      data: {
+        type,
+        title,
+        body,
+        data: data || null,
+        targetUserId: null, // null means broadcast to all
+        readBy: [], // Empty array - no one has read it yet
+      },
+    });
+    res.status(201).json(notification);
+  } catch (error) {
+    console.error("Error creating broadcast notification:", error);
+    res.status(500).json({ error: "Failed to create notification" });
+  }
+});
+
+// Stock Movements
+app.get("/api/products/low-stock", authenticateUser, requirePayrollOrAdmin, async (_req, res) => {
+  try {
+    const allProducts = await prisma.product.findMany({
+      select: {
+        id: true,
+        name: true,
+        stock: true,
+        minStockAlert: true,
+      },
+    });
+    
+    const lowStockProducts = allProducts.filter(p => p.stock <= p.minStockAlert);
+    res.json(lowStockProducts);
+  } catch (error) {
+    console.error("Error fetching low stock products:", error);
+    res.status(500).json({ error: "Failed to fetch low stock products" });
+  }
+});
+
+app.get("/api/products/:id/stock-history", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
+  try {
+    const productId = req.params.id;
+    
+    // Verify product exists
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      select: { id: true, name: true },
+    });
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    const movements = await prisma.stockMovement.findMany({
+      where: { productId },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(movements);
+  } catch (error) {
+    console.error("Error fetching stock history:", error);
+    res.status(500).json({ error: "Failed to fetch stock history" });
+  }
+});
+
+app.patch("/api/products/:id/stock", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const productId = parseInt(req.params.id);
+    const { qtyChange, note } = req.body;
+
+    if (qtyChange === undefined || qtyChange === 0) {
+      return res.status(400).json({ error: "Valid quantity change required" });
+    }
+
+    // Verify product exists
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+    });
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    // Create stock movement record
+    const movement = await prisma.stockMovement.create({
+      data: {
+        productId,
+        productName: product.name,
+        type: qtyChange > 0 ? "restock" : "adjustment", // Simplified
+        qtyChange: parseInt(qtyChange),
+        qtyBefore: product.stock,
+        qtyAfter: product.stock + parseInt(qtyChange),
+        note: note || "",
+        changedBy: req.user.id.toString(),
+      },
+    });
+
+    // Update product stock
+    const updatedProduct = await prisma.product.update({
+      where: { id: productId },
+      data: {
+        stock: product.stock + parseInt(qtyChange),
+        updatedAt: new Date(),
+      },
+    });
+
+    res.json({
+      product: updatedProduct,
+      movement,
+    });
+  } catch (error) {
+    console.error("Error updating product stock:", error);
+    res.status(500).json({ error: "Failed to update stock" });
+  }
+});
+
 // ── Admin credentials auth ──────────────────────────────────────────────────
 
 function hashPassword(password, salt) {
@@ -1654,7 +2806,7 @@ app.post("/api/auth/login", async (req, res) => {
     const hash = hashPassword(String(password ?? ""), user.salt);
     const ok = constantTimeCompare(hash, user.hash);
     if (ok) logAudit("login", "", `Staff sign-in: ${name} [${user.role}]`);
-    res.json({ ok, role: ok ? user.role : undefined });
+    res.json({ ok, role: ok ? user.role : undefined, id: user.id });
   } catch (e) {
     console.error("Login error:", e);
     res.status(500).json({ error: "Failed to verify credentials" });

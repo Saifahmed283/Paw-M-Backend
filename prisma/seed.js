@@ -89,6 +89,36 @@ const STAFF_ACCOUNTS = [
   { username: "staff", password: "staff123", role: "staff" },
 ];
 
+const EMPLOYEES = [
+  {
+    fullName: "Admin User",
+    email: "admin@pawclinicmadinaty.com",
+    role: "admin",
+    hourlyRate: 150,
+    monthlySalary: 5000,
+    payRateType: "monthly",
+    roleHoursPerDay: 8,
+  },
+  {
+    fullName: "Payroll Staff",
+    email: "payroll@pawclinicmadinaty.com",
+    role: "payroll",
+    hourlyRate: 80,
+    monthlySalary: 3200,
+    payRateType: "monthly",
+    roleHoursPerDay: 8,
+  },
+  {
+    fullName: "Clinic Staff",
+    email: "staff@pawclinicmadinaty.com",
+    role: "staff",
+    hourlyRate: 45,
+    monthlySalary: 0,
+    payRateType: "hourly",
+    roleHoursPerDay: 8,
+  },
+];
+
 async function main() {
   const bcrypt = await import("bcryptjs");
   const BCRYPT_ROUNDS = 12;
@@ -105,6 +135,14 @@ async function main() {
       });
       console.log(`[Paw-M] Created staff account: ${account.username} (${account.role})`);
     }
+  }
+
+  for (const emp of EMPLOYEES) {
+    await prisma.employee.upsert({
+      where: { email: emp.email },
+      update: emp,
+      create: emp,
+    });
   }
 
   for (const doctor of DOCTORS) {
@@ -143,7 +181,7 @@ async function main() {
     create: SETTINGS,
   });
 
-  console.log("[Paw-M] Database seeded: doctors, services, products, reviews, settings");
+  console.log("[Paw-M] Database seeded: staff accounts, employees, doctors, services, products, reviews, settings");
 }
 
 main()
