@@ -1,0 +1,110 @@
+import { Router } from "express";
+import { prisma } from "../lib/prisma.js";
+import { logAudit, nextId } from "../lib/utils.js";
+import { logger } from "../lib/logger.js";
+import { authenticateUser, requireStaff } from "../middleware/auth.js";
+import { validate } from "../middleware/validate.js";
+import { createBookingSchema, updateBookingStatusSchema } from "../schemas/bookings.js";
+
+const router = Router();
+const log = logger.child({ module: "routes/bookings" });
+
+router.get("/", authenticateUser, requireStaff, async (_req, res) => {
+  try {
+    const bookings = await prisma.booking.findMany({ orderBy: { createdAt: "desc" } });
+    res.json(bookings);
+  } catch (e) {
+    log.error({ err: e }, "failed to fetch bookings");
+    res.status(500).json({ error: "Failed to fetch bookings" });
+  }
+});
+
+router.post("/", validate(createBookingSchema), async (req, res) => {
+  const b = req.validated.body;
+  try {
+    const record = await prisma.booking.create({
+      data: {
+        id: await nextId("REQ", "booking"),
+        ownerName: b.ownerName,
+        phone: b.phone,
+        email: b.email,
+        petName: b.petName,
+        animalType: b.animalType,
+        breed: b.breed,
+        age: b.age,
+        weight: b.weight,
+        symptoms: b.symptoms,
+        allergies: b.allergies,
+        medications: b.medications,
+        doctorId: b.doctorId,
+        doctorName: b.doctorName,
+        date: b.date,
+        time: b.time,
+        emergency: b.emergency,
+      },
+    });
+    res.status(201).json(record);
+  } catch (e) {
+    log.error({ err: e }, "failed to create booking");
+    res.status(500).json({ error: "Failed to create booking" });
+  }
+});
+
+router.patch("/:id/status", authenticateUser, requireStaff, validate(updateBookingStatusSchema), async (req, res) => {
+  const { id } = req.validated.params;
+  const { status } = req.validated.body;
+  try {
+    const existing = await prisma.booking.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: "Booking not found" });
+
+    const { sendMail, buildBookingConfirmedEmail, buildBookingCancelledEmail } = await import("../lib/email.js");
+
+    const updated = await prisma.booking.update({ where: { id }, data: { status } });
+    logAudit("booking_status", id, `${updated.ownerName}'s booking → ${status}`);
+
+    const clinicSettings = await prisma.clinicSettings.findUnique({ where: { id: 1 } }).catch(() => null);
+    const clinicName = clinicSettings?.name || "Paw-M Clinic";
+
+    if (status === "confirmed" && existing.email) {
+      sendMail(buildBookingConfirmedEmail({
+        to: existing.email, ownerName: updated.ownerName, petName: updated.petName,
+        doctorName: updated.doctorName, date: updated.date, time: updated.time,
+        phone: existing.phone, clinicName,
+      })).catch(() => {});
+    } else if (status === "cancelled" && existing.email) {
+      sendMail(buildBookingCancelledEmail({
+        to: existing.email, ownerName: updated.ownerName, petName: updated.petName,
+        doctorName: updated.doctorName, date: updated.date, time: updated.time, clinicName,
+      })).catch(() => {});
+    }
+    res.json(updated);
+  } catch {
+    res.status(404).json({ error: "Booking not found" });
+  }
+});
+
+router.delete("/:id", authenticateUser, requireStaff, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const existing = await prisma.booking.findUnique({ where: { id } });
+    await prisma.booking.delete({ where: { id } });
+    logAudit("booking_delete", id, `Deleted booking for ${existing?.ownerName ?? "unknown"}`);
+    res.status(204).send();
+  } catch {
+    res.status(404).json({ error: "Booking not found" });
+  }
+});
+
+router.patch("/:id/archive", authenticateUser, requireStaff, async (req, res) => {
+  const { id } = req.params;
+  const archived = req.body?.archived === true;
+  try {
+    const updated = await prisma.booking.update({ where: { id }, data: { archived } });
+    logAudit(archived ? "booking_archive" : "booking_restore", id, `${updated.ownerName}'s booking ${archived ? "archived" : "restored"}`);
+    res.json(updated);
+  } catch {
+    res.status(404).json({ error: "Booking not found" });
+  }
+});
+
+export default router;

@@ -1,21 +1,21 @@
 import nodemailer from "nodemailer";
+import { config } from "../config.js";
+import { logger } from "./logger.js";
 
-const SMTP_HOST = process.env.SMTP_HOST || "smtp.gmail.com";
-const SMTP_PORT = Number(process.env.SMTP_PORT) || 587;
-const SMTP_USER = process.env.SMTP_USER || "paw.mclinic@gmail.com";
-const SMTP_PASS = process.env.SMTP_PASS || "";
-const FROM_NAME = process.env.SMTP_FROM_NAME || "Paw-M Clinic";
-const FROM_ADDR = process.env.SMTP_FROM_ADDR || `${FROM_NAME} <${SMTP_USER}>`;
+const log = logger.child({ module: "email" });
+
+const { host, port, user, pass, fromName } = config.smtp;
+const FROM_ADDR = config.smtp.fromAddr || `${fromName} <${user}>`;
 
 let transporter = null;
 
 function getTransporter() {
   if (!transporter) {
     transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_PORT === 465,
-      auth: { user: SMTP_USER, pass: SMTP_PASS },
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
     });
   }
   return transporter;
@@ -24,27 +24,11 @@ function getTransporter() {
 function escapeHtml(str) {
   if (!str) return "";
   return String(str)
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/"/g, "\"")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-function wrapText(text, maxLen = 70) {
-  const words = text.split(/\s+/);
-  const lines = [];
-  let line = "";
-  for (const word of words) {
-    if ((line + " " + word).trim().length > maxLen) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = (line + " " + word).trim();
-    }
-  }
-  if (line) lines.push(line);
-  return lines.map((l) => `    ${l}`).join("\n");
 }
 
 export function buildBookingConfirmedEmail({ to, ownerName, petName, doctorName, date, time, phone, clinicName }) {
@@ -67,7 +51,6 @@ Thank you for choosing ${clinicName}!
 Best regards,
 ${clinicName} Team
 `.trim();
-
   return { to, from: FROM_ADDR, subject, text: body };
 }
 
@@ -88,7 +71,6 @@ If this was a mistake or you'd like to rebook, please contact us.
 Best regards,
 ${clinicName} Team
 `.trim();
-
   return { to, from: FROM_ADDR, subject, text: body };
 }
 
@@ -111,11 +93,9 @@ export function buildOrderStatusEmail({ to, customerName, orderId, status, clini
     default:
       statusLine = `Your order status is now: ${status}.`;
   }
-
   const itemLines = items
     ? items.map((it) => `  - ${escapeHtml(it.name)} x${it.qty} @ ${it.price}`).join("\n")
     : "";
-
   const body = `
 Dear ${escapeHtml(customerName)},
 
@@ -130,7 +110,6 @@ For any questions, reply to this email or call us.
 Thank you,
 ${clinicName} Team
 `.trim();
-
   return { to, from: FROM_ADDR, subject, text: body };
 }
 
@@ -149,7 +128,6 @@ Your order will now proceed to completion.
 Thank you,
 ${clinicName} Team
 `.trim();
-
   return { to, from: FROM_ADDR, subject, text: body };
 }
 
@@ -168,7 +146,6 @@ Please submit a new payment proof or contact us to resolve this.
 Best regards,
 ${clinicName} Team
 `.trim();
-
   return { to, from: FROM_ADDR, subject, text: body };
 }
 
@@ -183,17 +160,17 @@ This code expires in 10 minutes. If you did not request an account, you can igno
 }
 
 export async function sendMail(mailOptions) {
-  if (!SMTP_PASS) {
-    console.warn("[email] SMTP_PASS not set — email not sent:", mailOptions.subject);
+  if (!pass) {
+    log.warn({ subject: mailOptions.subject, to: mailOptions.to }, "SMTP_PASS not set — email not sent");
     return { skipped: true, reason: "SMTP not configured" };
   }
   try {
-    const transporter = getTransporter();
-    const result = await transporter.sendMail(mailOptions);
-    console.log(`[email] Sent: ${mailOptions.subject} → ${mailOptions.to}`);
+    const transport = getTransporter();
+    const result = await transport.sendMail(mailOptions);
+    log.info({ subject: mailOptions.subject, to: mailOptions.to }, "email sent");
     return { ok: true, messageId: result.messageId };
   } catch (err) {
-    console.error("[email] Failed to send:", err.message);
+    log.error({ err: err.message }, "failed to send email");
     return { ok: false, error: err.message };
   }
 }

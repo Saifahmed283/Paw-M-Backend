@@ -1,0 +1,130 @@
+import { Router } from "express";
+import { prisma } from "../lib/prisma.js";
+import { logAudit, sanitizePetType } from "../lib/utils.js";
+import { logger } from "../lib/logger.js";
+import { authenticateUser, requireAdmin, requirePayrollOrAdmin } from "../middleware/auth.js";
+import { validate } from "../middleware/validate.js";
+import { createProductSchema, updateProductSchema, updateStockSchema } from "../schemas/products.js";
+import { adjustStock } from "../services/stock.js";
+
+const router = Router();
+const log = logger.child({ module: "routes/products" });
+
+router.get("/low-stock", authenticateUser, requirePayrollOrAdmin, async (_req, res) => {
+  try {
+    const allProducts = await prisma.product.findMany({
+      select: { id: true, name: true, stock: true, minStockAlert: true },
+    });
+    const lowStockProducts = allProducts.filter((p) => p.stock <= p.minStockAlert);
+    res.json(lowStockProducts);
+  } catch (e) {
+    log.error({ err: e }, "failed to fetch low stock products");
+    res.status(500).json({ error: "Failed to fetch low stock products" });
+  }
+});
+
+router.get("/", async (_req, res) => {
+  try {
+    const products = await prisma.product.findMany({ orderBy: { createdAt: "desc" } });
+    res.json(products);
+  } catch (e) {
+    log.error({ err: e }, "failed to fetch products");
+    res.status(500).json({ error: "Failed to fetch products" });
+  }
+});
+
+router.get("/:id/stock-history", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
+  try {
+    const productId = req.params.id;
+    const product = await prisma.product.findUnique({ where: { id: productId }, select: { id: true, name: true } });
+    if (!product) return res.status(404).json({ error: "Product not found" });
+    const movements = await prisma.stockMovement.findMany({ where: { productId }, orderBy: { createdAt: "desc" } });
+    res.json(movements);
+  } catch (e) {
+    log.error({ err: e }, "failed to fetch stock history");
+    res.status(500).json({ error: "Failed to fetch stock history" });
+  }
+});
+
+router.get("/:id", async (req, res) => {
+  try {
+    const product = await prisma.product.findUnique({ where: { id: req.params.id } });
+    if (!product) return res.status(404).json({ error: "Product not found" });
+    res.json(product);
+  } catch {
+    res.status(404).json({ error: "Product not found" });
+  }
+});
+
+router.post("/", authenticateUser, requireAdmin, validate(createProductSchema), async (req, res) => {
+  const body = req.validated.body;
+  try {
+    const created = await prisma.product.create({
+      data: {
+        name: body.name,
+        description: body.description,
+        price: body.price,
+        compareAtPrice: body.compareAtPrice ?? null,
+        image: body.image,
+        category: body.category,
+        petType: sanitizePetType(body.petType),
+        stock: body.stock,
+        featured: body.featured,
+      },
+    });
+    logAudit("product_create", created.id, `Created product ${created.name}`);
+    res.status(201).json(created);
+  } catch (e) {
+    log.error({ err: e }, "failed to create product");
+    res.status(500).json({ error: "Failed to create product" });
+  }
+});
+
+router.patch("/:id", authenticateUser, requireAdmin, validate(updateProductSchema), async (req, res) => {
+  const { id } = req.validated.params;
+  const patch = req.validated.body;
+  const data = {};
+  if (patch.name !== undefined) data.name = patch.name;
+  if (patch.description !== undefined) data.description = patch.description;
+  if (patch.image !== undefined) data.image = patch.image;
+  if (patch.category !== undefined) data.category = patch.category;
+  if (patch.petType !== undefined) data.petType = sanitizePetType(patch.petType);
+  if (patch.featured !== undefined) data.featured = patch.featured;
+  if (patch.price !== undefined) data.price = patch.price;
+  if (patch.compareAtPrice !== undefined) data.compareAtPrice = patch.compareAtPrice;
+  if (patch.stock !== undefined) data.stock = patch.stock;
+  try {
+    const updated = await prisma.product.update({ where: { id }, data });
+    logAudit("product_update", id, `Updated product ${updated.name}`);
+    res.json(updated);
+  } catch {
+    res.status(404).json({ error: "Product not found" });
+  }
+});
+
+router.delete("/:id", authenticateUser, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const existing = await prisma.product.findUnique({ where: { id } });
+    await prisma.product.delete({ where: { id } });
+    logAudit("product_delete", id, `Deleted product ${existing?.name ?? "unknown"}`);
+    res.status(204).send();
+  } catch {
+    res.status(404).json({ error: "Product not found" });
+  }
+});
+
+router.patch("/:id/stock", authenticateUser, requireAdmin, validate(updateStockSchema), async (req, res) => {
+  try {
+    const { id } = req.validated.params;
+    const { qtyChange, note, type } = req.validated.body;
+    const result = await adjustStock(id, qtyChange, note, req.user.username, type);
+    res.json(result);
+  } catch (e) {
+    if (e?.status) return res.status(e.status).json({ error: e.message });
+    log.error({ err: e }, "failed to update stock");
+    res.status(500).json({ error: "Failed to update stock" });
+  }
+});
+
+export default router;

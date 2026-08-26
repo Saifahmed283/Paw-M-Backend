@@ -1,0 +1,42 @@
+import { Router } from "express";
+import authRoutes from "./auth.js";
+import workSessionRoutes from "./work-sessions.js";
+import workDayRoutes from "./work-days.js";
+import bookingRoutes from "./bookings.js";
+import doctorRoutes from "./doctors.js";
+import serviceRoutes from "./services.js";
+import productRoutes from "./products.js";
+import orderRoutes from "./orders.js";
+import paymentRoutes from "./payments.js";
+import reviewRoutes from "./reviews.js";
+import settingsRoutes from "./settings.js";
+import employeeRoutes from "./employees.js";
+import payrollExtendedRoutes from "./payroll-extended.js";
+import payrollRoutes from "./payroll.js";
+import taskRoutes from "./tasks.js";
+import notificationRoutes from "./notifications.js";
+import googleRoutes from "./google.js";
+import auditRoutes from "./audit.js";
+
+const router = Router();
+
+router.use("/auth", authRoutes);
+router.use("/work-session", workSessionRoutes);
+router.use("/work-sessions", payrollExtendedRoutes);
+router.use("/work-days", workDayRoutes);
+router.use("/bookings", bookingRoutes);
+router.use("/doctors", doctorRoutes);
+router.use("/services", serviceRoutes);
+router.use("/products", productRoutes);
+router.use("/orders", orderRoutes);
+router.use("/payments", paymentRoutes);
+router.use("/reviews", reviewRoutes);
+router.use("/settings", settingsRoutes);
+router.use("/employees", employeeRoutes);
+router.use("/payroll", payrollRoutes);
+router.use("/tasks", taskRoutes);
+router.use("/notifications", notificationRoutes);
+router.use("/google", googleRoutes);
+router.use("/audit-logs", auditRoutes);
+
+export default router;
