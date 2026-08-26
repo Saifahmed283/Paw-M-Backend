@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authRoutes from "./auth.js";
+import clientAuthRoutes from "./client-auth.js";
 import workSessionRoutes from "./work-sessions.js";
 import workDayRoutes from "./work-days.js";
 import bookingRoutes from "./bookings.js";
@@ -21,6 +22,7 @@ import auditRoutes from "./audit.js";
 const router = Router();
 
 router.use("/auth", authRoutes);
+router.use("/client-auth", clientAuthRoutes);
 router.use("/work-session", workSessionRoutes);
 router.use("/work-sessions", payrollExtendedRoutes);
 router.use("/work-days", workDayRoutes);
