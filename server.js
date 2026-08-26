@@ -11,6 +11,7 @@ import {
   buildOrderStatusEmail,
   buildPaymentSuccessEmail,
   buildPaymentFailedEmail,
+  buildClientVerificationEmail,
   sendMail,
 } from "./emailService.js";
 

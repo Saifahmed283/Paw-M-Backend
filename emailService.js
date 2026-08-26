@@ -172,6 +172,16 @@ ${clinicName} Team
   return { to, from: FROM_ADDR, subject, text: body };
 }
 
+export function buildClientVerificationEmail({ to, code, clinicName }) {
+  const subject = `Verify your email — ${clinicName}`;
+  const body = `
+Your ${clinicName} verification code is: ${code}
+
+This code expires in 10 minutes. If you did not request an account, you can ignore this email.
+`.trim();
+  return { to, from: FROM_ADDR, subject, text: body };
+}
+
 export async function sendMail(mailOptions) {
   if (!SMTP_PASS) {
     console.warn("[email] SMTP_PASS not set — email not sent:", mailOptions.subject);

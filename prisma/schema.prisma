@@ -43,6 +43,7 @@ enum StaffRole {
 
 model Booking {
   id          String        @id @default(cuid())
+  clientId    String?
   ownerName   String
   phone       String
   email       String
@@ -117,6 +118,45 @@ model AdminUser {
   createdAt DateTime   @default(now())
 }
 
+model ClientAccount {
+  id           String          @id @default(cuid())
+  email        String          @unique
+  passwordHash String
+  fullName     String
+  phone        String          @default("")
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  sessions     ClientSession[]
+
+  @@index([email])
+}
+
+model ClientSession {
+  id        String        @id @default(cuid())
+  tokenHash String        @unique
+  clientId  String
+  client    ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime      @default(now())
+
+  @@index([clientId, expiresAt])
+}
+
+model ClientVerification {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  salt         String
+  fullName     String
+  phone        String   @default("")
+  codeHash     String
+  attempts     Int      @default(0)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
 model Employee {
   id              String    @id @default(cuid())
 
@@ -176,16 +216,19 @@ model Product {
   stock          Int      @default(0)
   minStockAlert  Int      @default(5)     // trigger low-stock alert below this
   featured       Boolean  @default(false)
+  barcode        String?  @unique
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@index([category])
   @@index([featured])
   @@index([stock])
+  @@index([barcode])
 }
 
 model Order {
   id            String        @id @default(cuid())
+  clientId      String?
   customerName  String
   phone         String
   email         String
