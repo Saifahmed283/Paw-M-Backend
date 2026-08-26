@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logAudit, nextId } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireStaff } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { createPaymentSchema, updatePaymentSchema } from "../schemas/payments.js";
@@ -9,10 +10,14 @@ import { createPaymentSchema, updatePaymentSchema } from "../schemas/payments.js
 const router = Router();
 const log = logger.child({ module: "routes/payments" });
 
-router.get("/", authenticateUser, requireStaff, async (_req, res) => {
+router.get("/", authenticateUser, requireStaff, async (req, res) => {
   try {
-    const payments = await prisma.payment.findMany({ orderBy: { createdAt: "desc" } });
-    res.json(payments);
+    const p = parsePagination(req.query);
+    const [payments, total] = await Promise.all([
+      prisma.payment.findMany({ orderBy: { createdAt: "desc" }, skip: p.skip, take: p.limit }),
+      prisma.payment.count(),
+    ]);
+    res.json(paginatedResponse(payments, total, p));
   } catch {
     res.status(500).json({ error: "Failed to load payments" });
   }

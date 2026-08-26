@@ -3,18 +3,24 @@ import { prisma } from "../lib/prisma.js";
 import { logAudit, nextId, fawryReference } from "../lib/utils.js";
 import { validateProofImage } from "../services/orders.js";
 import { logger } from "../lib/logger.js";
-import { authenticateUser, requireStaff } from "../middleware/auth.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
+import { authenticateUser, requireStaff, authenticateClient } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { createOrderSchema, updateOrderStatusSchema, updateOrderPaymentSchema } from "../schemas/orders.js";
 import { createOrderTransactional, restoreStockOnCancel } from "../services/orders.js";
+import { createBroadcastNotification } from "../lib/notify.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/orders" });
 
-router.get("/", authenticateUser, requireStaff, async (_req, res) => {
+router.get("/", authenticateUser, requireStaff, async (req, res) => {
   try {
-    const orders = await prisma.order.findMany({ orderBy: { createdAt: "desc" } });
-    res.json(orders);
+    const p = parsePagination(req.query);
+    const [orders, total] = await Promise.all([
+      prisma.order.findMany({ orderBy: { createdAt: "desc" }, skip: p.skip, take: p.limit }),
+      prisma.order.count(),
+    ]);
+    res.json(paginatedResponse(orders, total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch orders");
     res.status(500).json({ error: "Failed to fetch orders" });
@@ -36,7 +42,7 @@ router.get("/track", async (req, res) => {
   }
 });
 
-router.post("/", validate(createOrderSchema), async (req, res) => {
+router.post("/", authenticateClient, validate(createOrderSchema), async (req, res) => {
   const body = req.validated.body;
   const paymentMethod = body.paymentMethod;
   try {
@@ -72,6 +78,12 @@ router.post("/", validate(createOrderSchema), async (req, res) => {
       },
       { timeout: 15000 }
     );
+    createBroadcastNotification(prisma, {
+      type: "order",
+      title: "New order received",
+      body: `${created.customerName} placed an order for EGP ${created.total.toLocaleString()}.`,
+      data: { orderId: created.id },
+    }).catch(() => {});
     res.status(201).json(created);
   } catch (e) {
     if (e?.status === 400 || e?.status === 409) {

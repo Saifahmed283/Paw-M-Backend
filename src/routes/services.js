@@ -2,15 +2,20 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireAdmin } from "../middleware/auth.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/services" });
 
-router.get("/", async (_req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const services = await prisma.service.findMany();
-    res.json(services);
+    const p = parsePagination(req.query);
+    const [services, total] = await Promise.all([
+      prisma.service.findMany({ skip: p.skip, take: p.limit }),
+      prisma.service.count(),
+    ]);
+    res.json(paginatedResponse(services, total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch services");
     res.status(500).json({ error: "Failed to fetch services" });

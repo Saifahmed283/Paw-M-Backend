@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { createReviewSchema, updateReviewStatusSchema } from "../schemas/reviews.js";
@@ -9,10 +10,14 @@ import { createReviewSchema, updateReviewStatusSchema } from "../schemas/reviews
 const router = Router();
 const log = logger.child({ module: "routes/reviews" });
 
-router.get("/", async (_req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const reviews = await prisma.review.findMany({ orderBy: [{ status: "asc" }, { createdAt: "desc" }] });
-    res.json(reviews);
+    const p = parsePagination(req.query);
+    const [reviews, total] = await Promise.all([
+      prisma.review.findMany({ orderBy: [{ status: "asc" }, { createdAt: "desc" }], skip: p.skip, take: p.limit }),
+      prisma.review.count(),
+    ]);
+    res.json(paginatedResponse(reviews, total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch reviews");
     res.status(500).json({ error: "Failed to fetch reviews" });
@@ -21,11 +26,17 @@ router.get("/", async (_req, res) => {
 
 router.get("/products/:id", async (req, res) => {
   try {
-    const reviews = await prisma.review.findMany({
-      where: { productId: req.params.id, status: "approved" },
-      orderBy: { createdAt: "desc" },
-    });
-    res.json(reviews);
+    const p = parsePagination(req.query);
+    const [reviews, total] = await Promise.all([
+      prisma.review.findMany({
+        where: { productId: req.params.id, status: "approved" },
+        orderBy: { createdAt: "desc" },
+        skip: p.skip,
+        take: p.limit,
+      }),
+      prisma.review.count({ where: { productId: req.params.id, status: "approved" } }),
+    ]);
+    res.json(paginatedResponse(reviews, total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch reviews");
     res.status(500).json({ error: "Failed to fetch reviews" });

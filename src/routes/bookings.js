@@ -2,26 +2,44 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logAudit, nextId } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
-import { authenticateUser, requireStaff } from "../middleware/auth.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
+import { authenticateUser, requireStaff, authenticateClient } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { createBookingSchema, updateBookingStatusSchema } from "../schemas/bookings.js";
+import { createBroadcastNotification } from "../lib/notify.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/bookings" });
 
-router.get("/", authenticateUser, requireStaff, async (_req, res) => {
+router.get("/", authenticateUser, requireStaff, async (req, res) => {
   try {
-    const bookings = await prisma.booking.findMany({ orderBy: { createdAt: "desc" } });
-    res.json(bookings);
+    const p = parsePagination(req.query);
+    const [bookings, total] = await Promise.all([
+      prisma.booking.findMany({ orderBy: { createdAt: "desc" }, skip: p.skip, take: p.limit }),
+      prisma.booking.count(),
+    ]);
+    res.json(paginatedResponse(bookings, total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch bookings");
     res.status(500).json({ error: "Failed to fetch bookings" });
   }
 });
 
-router.post("/", validate(createBookingSchema), async (req, res) => {
+router.post("/", authenticateClient, validate(createBookingSchema), async (req, res) => {
   const b = req.validated.body;
   try {
+    const conflict = await prisma.booking.findFirst({
+      where: {
+        doctorId: b.doctorId,
+        date: b.date,
+        time: b.time,
+        status: { not: "cancelled" },
+      },
+    });
+    if (conflict) {
+      return res.status(409).json({ error: "This doctor is already booked at the requested date and time. Please choose a different slot." });
+    }
+
     const record = await prisma.booking.create({
       data: {
         id: await nextId("REQ", "booking"),
@@ -43,6 +61,12 @@ router.post("/", validate(createBookingSchema), async (req, res) => {
         emergency: b.emergency,
       },
     });
+    createBroadcastNotification(prisma, {
+      type: "booking",
+      title: "New booking request",
+      body: `${record.ownerName} booked ${record.petName} with ${record.doctorName} on ${record.date} at ${record.time}.`,
+      data: { bookingId: record.id },
+    }).catch(() => {});
     res.status(201).json(record);
   } catch (e) {
     log.error({ err: e }, "failed to create booking");

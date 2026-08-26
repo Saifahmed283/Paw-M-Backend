@@ -34,8 +34,8 @@ function makeSalt() {
   return crypto.randomBytes(16).toString("hex");
 }
 
-function hashPassword(password, salt) {
-  return bcrypt.hashSync(password, salt);
+function hashPassword(password) {
+  return bcrypt.hashSync(password, BCRYPT_ROUNDS);
 }
 
 // POST /api/client-auth/register — request email verification
@@ -55,7 +55,7 @@ router.post("/register", async (req, res) => {
     }
 
     const salt = makeSalt();
-    const passwordHash = hashPassword(password, salt);
+    const passwordHash = hashPassword(password);
     const code = generateCode();
     const codeHash = await bcrypt.hash(code, 10);
 

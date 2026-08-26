@@ -7,7 +7,7 @@ export const createBookingSchema = z.object({
     email: z.string().max(120).optional().default(""),
     petName: z.string().min(1).max(80),
     animalType: z.string().max(40),
-    breed: z.string().max(60),
+    breed: z.string().max(60).optional().default(""),
     age: z.string().max(20).optional().default(""),
     weight: z.string().max(20).optional().default(""),
     symptoms: z.string().max(1000).optional().default(""),

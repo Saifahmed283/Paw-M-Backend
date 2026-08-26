@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logAudit, archiveFinishedDayRecords, todayStr } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
+import { resolveEmployeeId } from "../lib/resolve-employee.js";
 import { authenticateUser, requireStaff } from "../middleware/auth.js";
 
 const router = Router();
@@ -9,8 +10,10 @@ const log = logger.child({ module: "routes/work-sessions" });
 
 router.get("/", authenticateUser, requireStaff, async (req, res) => {
   try {
+    const employeeId = await resolveEmployeeId(req.user.id);
+    if (!employeeId) return res.json(null);
     const session = await prisma.workSession.findFirst({
-      where: { employeeId: req.user.id, endedAt: null },
+      where: { employeeId, endedAt: null },
       orderBy: { startedAt: "desc" },
     });
     res.json(session ?? null);
@@ -22,8 +25,11 @@ router.get("/", authenticateUser, requireStaff, async (req, res) => {
 
 router.post("/check-in", authenticateUser, requireStaff, async (req, res) => {
   try {
+    const employeeId = await resolveEmployeeId(req.user.id);
+    if (!employeeId) return res.status(400).json({ error: "No employee profile found for your account." });
+
     const open = await prisma.workSession.findFirst({
-      where: { employeeId: req.user.id, endedAt: null },
+      where: { employeeId, endedAt: null },
       orderBy: { startedAt: "desc" },
     });
     if (open) {
@@ -32,12 +38,12 @@ router.post("/check-in", authenticateUser, requireStaff, async (req, res) => {
         await prisma.workSession.update({ where: { id: open.id }, data: { endedAt: new Date() } });
         logAudit("check_out", open.id, "Previous shift auto-closed on new check-in");
         logAudit("check_in", "", `Checked in — auto-archived ${archived.bookings} bookings and ${archived.orders} orders`);
-        const session = await prisma.workSession.create({ data: { date: todayStr(), employeeId: req.user.id } });
+        const session = await prisma.workSession.create({ data: { date: todayStr(), employeeId } });
         return res.status(201).json({ session, archived });
       }
       return res.json({ session: open, archived: { bookings: 0, orders: 0 } });
     }
-    const session = await prisma.workSession.create({ data: { date: todayStr(), employeeId: req.user.id } });
+    const session = await prisma.workSession.create({ data: { date: todayStr(), employeeId } });
     logAudit("check_in", session.id, "Checked in");
     res.status(201).json({ session, archived: { bookings: 0, orders: 0 } });
   } catch (e) {
@@ -48,8 +54,11 @@ router.post("/check-in", authenticateUser, requireStaff, async (req, res) => {
 
 router.post("/check-out", authenticateUser, requireStaff, async (req, res) => {
   try {
+    const employeeId = await resolveEmployeeId(req.user.id);
+    if (!employeeId) return res.status(400).json({ error: "No employee profile found for your account." });
+
     const open = await prisma.workSession.findFirst({
-      where: { employeeId: req.user.id, endedAt: null },
+      where: { employeeId, endedAt: null },
       orderBy: { startedAt: "desc" },
     });
     if (!open) return res.status(400).json({ error: "You are not checked in." });

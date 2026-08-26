@@ -66,3 +66,13 @@ export const config = {
 
   bodyLimit: process.env.BODY_LIMIT || "8mb",
 };
+
+if (config.isProduction && config.jwtSecret === "dev-secret-change-me-in-production") {
+  throw new Error(
+    "FATAL: JWT_SECRET is set to the default value. Set JWT_SECRET environment variable in production."
+  );
+}
+
+if (config.isProduction && !config.databaseUrl) {
+  throw new Error("FATAL: DATABASE_URL is not set.");
+}

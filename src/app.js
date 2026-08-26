@@ -67,6 +67,12 @@ const apiLimiter = rateLimit({
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/register", authLimiter);
 app.use("/api/auth/credentials", authLimiter);
+app.use("/api/client-auth/register", authLimiter);
+app.use("/api/client-auth/login", authLimiter);
+app.use("/api/client-auth/verify", authLimiter);
+app.use("/api/bookings", sensitiveLimiter);
+app.use("/api/orders", sensitiveLimiter);
+app.use("/api/reviews", sensitiveLimiter);
 
 // ── Health check (before rate limiter) ───────────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ status: "ok", db: "connected" }));

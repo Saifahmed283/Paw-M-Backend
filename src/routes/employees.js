@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { createEmployeeSchema, updateEmployeeSchema } from "../schemas/employees.js";
@@ -16,10 +17,14 @@ const EMPLOYEE_SELECT = {
   createdAt: true, updatedAt: true,
 };
 
-router.get("/", authenticateUser, requireAdmin, async (_req, res) => {
+router.get("/", authenticateUser, requireAdmin, async (req, res) => {
   try {
-    const employees = await prisma.employee.findMany({ select: EMPLOYEE_SELECT, orderBy: { fullName: "asc" } });
-    res.json(employees);
+    const p = parsePagination(req.query);
+    const [employees, total] = await Promise.all([
+      prisma.employee.findMany({ select: EMPLOYEE_SELECT, orderBy: { fullName: "asc" }, skip: p.skip, take: p.limit }),
+      prisma.employee.count(),
+    ]);
+    res.json(paginatedResponse(employees, total, p));
   } catch (error) {
     log.error({ err: error }, "failed to fetch employees");
     res.status(500).json({ error: "Failed to fetch employees" });

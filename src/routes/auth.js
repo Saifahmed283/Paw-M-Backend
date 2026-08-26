@@ -1,16 +1,19 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { config } from "../config.js";
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
 import { validate } from "../middleware/validate.js";
 import { loginSchema, registerSchema, changeCredentialsSchema } from "../schemas/auth.js";
+import { sendMail } from "../lib/email.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/auth" });
+
+const passwordResets = new Map();
 
 const MIN_USERNAME = 3;
 const MIN_PASSWORD = 6;
@@ -182,6 +185,80 @@ router.put("/credentials", validate(changeCredentialsSchema), async (req, res) =
   } catch (e) {
     log.error({ err: e }, "credentials update failed");
     res.status(500).json({ error: "Failed to update credentials" });
+  }
+});
+
+router.post("/forgot-password", async (req, res) => {
+  const { username } = req.body || {};
+  const name = (typeof username === "string" ? username : "").trim().toLowerCase();
+  const generic = { message: "If an account exists, a reset code has been sent." };
+  try {
+    if (!name) return res.json(generic);
+    const user = await prisma.adminUser.findUnique({ where: { username: name } });
+    if (!user) return res.json(generic);
+
+    const code = String(randomInt(0, 999999)).padStart(6, "0");
+    passwordResets.set(name, { code, expiresAt: Date.now() + 15 * 60 * 1000 });
+
+    const employee = await prisma.employee.findFirst({
+      where: { OR: [{ email: name }, { email: { startsWith: name + "@" } }] },
+      select: { email: true },
+    });
+    const clinicName = config.smtp.fromName || "Paw-M Clinic";
+    const to = employee?.email || `${name}@placeholder.invalid`;
+    await sendMail({
+      to,
+      subject: `${clinicName} — Password Reset Code`,
+      text: `Your password reset code is: ${code}\nIt expires in 15 minutes.`,
+      html: `<p>Your password reset code is: <b>${code}</b></p><p>It expires in 15 minutes.</p>`,
+    });
+
+    logAudit("forgot_password", "", `Reset code requested for: ${name}`);
+    res.json(generic);
+  } catch (e) {
+    log.error({ err: e }, "forgot-password failed");
+    res.json(generic);
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  const { username, code, newPassword } = req.body || {};
+  const name = (typeof username === "string" ? username : "").trim().toLowerCase();
+  const resetCode = typeof code === "string" ? code.trim() : "";
+
+  try {
+    if (!name || !resetCode || !newPassword) {
+      return res.status(400).json({ error: "username, code, and newPassword are required." });
+    }
+    if (typeof newPassword !== "string" || newPassword.length < MIN_PASSWORD) {
+      return res.status(400).json({ error: `New password must be at least ${MIN_PASSWORD} characters.` });
+    }
+
+    const stored = passwordResets.get(name);
+    if (!stored || stored.code !== resetCode) {
+      return res.status(400).json({ error: "Invalid or expired reset code." });
+    }
+    if (Date.now() > stored.expiresAt) {
+      passwordResets.delete(name);
+      return res.status(400).json({ error: "Invalid or expired reset code." });
+    }
+
+    const user = await prisma.adminUser.findUnique({ where: { username: name } });
+    if (!user) {
+      passwordResets.delete(name);
+      return res.status(400).json({ error: "Invalid or expired reset code." });
+    }
+
+    const salt = bcrypt.genSaltSync(BCRYPT_ROUNDS);
+    const hash = hashPassword(newPassword, salt);
+    await prisma.adminUser.update({ where: { id: user.id }, data: { salt, hash } });
+    passwordResets.delete(name);
+
+    logAudit("password_reset", "", `Password reset for: ${name}`);
+    res.json({ message: "Password has been reset." });
+  } catch (e) {
+    log.error({ err: e }, "reset-password failed");
+    res.status(500).json({ error: "Failed to reset password." });
   }
 });
 

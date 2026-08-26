@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logAudit, sanitizePetType } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireAdmin, requirePayrollOrAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { createProductSchema, updateProductSchema, updateStockSchema } from "../schemas/products.js";
@@ -10,23 +11,30 @@ import { adjustStock } from "../services/stock.js";
 const router = Router();
 const log = logger.child({ module: "routes/products" });
 
-router.get("/low-stock", authenticateUser, requirePayrollOrAdmin, async (_req, res) => {
+router.get("/low-stock", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
   try {
+    const p = parsePagination(req.query);
     const allProducts = await prisma.product.findMany({
       select: { id: true, name: true, stock: true, minStockAlert: true },
     });
     const lowStockProducts = allProducts.filter((p) => p.stock <= p.minStockAlert);
-    res.json(lowStockProducts);
+    const total = lowStockProducts.length;
+    const paginated = lowStockProducts.slice(p.skip, p.skip + p.limit);
+    res.json(paginatedResponse(paginated, total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch low stock products");
     res.status(500).json({ error: "Failed to fetch low stock products" });
   }
 });
 
-router.get("/", async (_req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const products = await prisma.product.findMany({ orderBy: { createdAt: "desc" } });
-    res.json(products);
+    const p = parsePagination(req.query);
+    const [products, total] = await Promise.all([
+      prisma.product.findMany({ orderBy: { createdAt: "desc" }, skip: p.skip, take: p.limit }),
+      prisma.product.count(),
+    ]);
+    res.json(paginatedResponse(products, total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch products");
     res.status(500).json({ error: "Failed to fetch products" });
@@ -38,8 +46,12 @@ router.get("/:id/stock-history", authenticateUser, requirePayrollOrAdmin, async 
     const productId = req.params.id;
     const product = await prisma.product.findUnique({ where: { id: productId }, select: { id: true, name: true } });
     if (!product) return res.status(404).json({ error: "Product not found" });
-    const movements = await prisma.stockMovement.findMany({ where: { productId }, orderBy: { createdAt: "desc" } });
-    res.json(movements);
+    const p = parsePagination(req.query);
+    const [movements, total] = await Promise.all([
+      prisma.stockMovement.findMany({ where: { productId }, orderBy: { createdAt: "desc" }, skip: p.skip, take: p.limit }),
+      prisma.stockMovement.count({ where: { productId } }),
+    ]);
+    res.json(paginatedResponse(movements, total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch stock history");
     res.status(500).json({ error: "Failed to fetch stock history" });

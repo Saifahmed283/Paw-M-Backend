@@ -2,15 +2,20 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireAdmin } from "../middleware/auth.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/doctors" });
 
-router.get("/", async (_req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const doctors = await prisma.doctor.findMany();
-    res.json(doctors);
+    const p = parsePagination(req.query);
+    const [doctors, total] = await Promise.all([
+      prisma.doctor.findMany({ skip: p.skip, take: p.limit }),
+      prisma.doctor.count(),
+    ]);
+    res.json(paginatedResponse(doctors, total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch doctors");
     res.status(500).json({ error: "Failed to fetch doctors" });

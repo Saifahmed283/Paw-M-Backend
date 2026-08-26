@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import crypto from "node:crypto";
 import { config } from "../config.js";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
@@ -62,3 +63,38 @@ export const requirePayrollOrAdmin = (req, res, next) => {
   }
   next();
 };
+
+export function authenticateClient(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized — no client session" });
+  }
+  const token = authHeader.slice(7);
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+  prisma.clientSession
+    .findFirst({
+      where: { tokenHash, expiresAt: { gt: new Date() } },
+      select: { clientId: true },
+    })
+    .then((session) => {
+      if (!session) {
+        return res.status(401).json({ error: "Invalid or expired client session" });
+      }
+      return prisma.clientAccount.findUnique({
+        where: { id: session.clientId },
+        select: { id: true, email: true, fullName: true },
+      });
+    })
+    .then((client) => {
+      if (!client) {
+        return res.status(401).json({ error: "Client account not found" });
+      }
+      req.client = client;
+      next();
+    })
+    .catch((err) => {
+      log.error({ err }, "client auth middleware error");
+      return res.status(500).json({ error: "Internal server error" });
+    });
+}

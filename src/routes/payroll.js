@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireAdmin, requirePayrollOrAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { calculatePayrollSchema, payrollRecordStatusSchema, payrollRecordAmountSchema, bonusDeductionRequestSchema, reviewRequestSchema } from "../schemas/payroll.js";
@@ -16,12 +17,18 @@ router.get("/records", authenticateUser, requirePayrollOrAdmin, async (req, res)
     if (periodStart) where.periodStart = { gte: periodStart };
     if (periodEnd) where.periodEnd = { lte: periodEnd };
     if (status) where.status = status;
-    const records = await prisma.payrollRecord.findMany({
-      where,
-      include: { employee: { select: { id: true, fullName: true, role: true } } },
-      orderBy: { createdAt: "desc" },
-    });
-    res.json(records);
+    const p = parsePagination(req.query);
+    const [records, total] = await Promise.all([
+      prisma.payrollRecord.findMany({
+        where,
+        include: { employee: { select: { id: true, fullName: true, role: true } } },
+        orderBy: { createdAt: "desc" },
+        skip: p.skip,
+        take: p.limit,
+      }),
+      prisma.payrollRecord.count({ where }),
+    ]);
+    res.json(paginatedResponse(records, total, p));
   } catch (error) {
     log.error({ err: error }, "failed to fetch payroll records");
     res.status(500).json({ error: "Failed to fetch payroll records" });
@@ -97,7 +104,9 @@ router.post("/:recordId/bonus-request", authenticateUser, requirePayrollOrAdmin,
     if (req.user.role === "payroll") {
       const payrollUser = await prisma.adminUser.findUnique({ where: { id: req.user.id } });
       const employee = payrollUser
-        ? await prisma.employee.findFirst({ where: { email: payrollUser.username } })
+        ? await prisma.employee.findFirst({
+            where: { OR: [{ email: payrollUser.username }, { email: { startsWith: payrollUser.username + "@" } }] },
+          })
         : null;
       if (!employee || payrollRecord.employeeId !== employee.id) {
         return res.status(403).json({ error: "Forbidden — can only request bonuses for your own employees" });
@@ -126,7 +135,9 @@ router.post("/:recordId/deduction-request", authenticateUser, requirePayrollOrAd
     if (req.user.role === "payroll") {
       const payrollUser = await prisma.adminUser.findUnique({ where: { id: req.user.id } });
       const employee = payrollUser
-        ? await prisma.employee.findFirst({ where: { email: payrollUser.username } })
+        ? await prisma.employee.findFirst({
+            where: { OR: [{ email: payrollUser.username }, { email: { startsWith: payrollUser.username + "@" } }] },
+          })
         : null;
       if (!employee || payrollRecord.employeeId !== employee.id) {
         return res.status(403).json({ error: "Forbidden — can only request deductions for your own employees" });
@@ -152,12 +163,18 @@ router.get("/:recordId/requests", authenticateUser, requireAdmin, async (req, re
     const { type } = req.query;
     const where = { payrollRecordId: recordId };
     if (type) where.type = type;
-    const requests = await prisma.bonusDeductionRequest.findMany({
-      where,
-      include: { employee: { select: { id: true, fullName: true } } },
-      orderBy: { createdAt: "desc" },
-    });
-    res.json(requests);
+    const p = parsePagination(req.query);
+    const [requests, total] = await Promise.all([
+      prisma.bonusDeductionRequest.findMany({
+        where,
+        include: { employee: { select: { id: true, fullName: true } } },
+        orderBy: { createdAt: "desc" },
+        skip: p.skip,
+        take: p.limit,
+      }),
+      prisma.bonusDeductionRequest.count({ where }),
+    ]);
+    res.json(paginatedResponse(requests, total, p));
   } catch (error) {
     log.error({ err: error }, "failed to fetch requests");
     res.status(500).json({ error: "Failed to fetch requests" });

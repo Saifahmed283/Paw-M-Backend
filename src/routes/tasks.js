@@ -1,8 +1,11 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
+import { logAudit } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
+import { resolveEmployeeId } from "../lib/resolve-employee.js";
 import { authenticateUser, requireAdmin, requireStaff } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { createTaskSchema, updateTaskSchema, updateTaskStatusSchema } from "../schemas/tasks.js";
 
 const router = Router();
@@ -28,21 +31,33 @@ router.post("/", authenticateUser, requireAdmin, validate(createTaskSchema), asy
 
 router.get("/mine", authenticateUser, requireStaff, async (req, res) => {
   try {
-    const tasks = await prisma.adminTask.findMany({
-      where: { assignedToId: req.user.id },
-      orderBy: { createdAt: "desc" },
-    });
-    res.json(tasks);
+    const employeeId = await resolveEmployeeId(req.user.id);
+    if (!employeeId) return res.json(paginatedResponse([], 0, parsePagination(req.query)));
+    const p = parsePagination(req.query);
+    const [tasks, total] = await Promise.all([
+      prisma.adminTask.findMany({
+        where: { assignedToId: employeeId },
+        orderBy: { createdAt: "desc" },
+        skip: p.skip,
+        take: p.limit,
+      }),
+      prisma.adminTask.count({ where: { assignedToId: employeeId } }),
+    ]);
+    res.json(paginatedResponse(tasks, total, p));
   } catch (error) {
     log.error({ err: error }, "failed to fetch tasks");
     res.status(500).json({ error: "Failed to fetch tasks" });
   }
 });
 
-router.get("/all", authenticateUser, requireAdmin, async (_req, res) => {
+router.get("/all", authenticateUser, requireAdmin, async (req, res) => {
   try {
-    const tasks = await prisma.adminTask.findMany({ orderBy: { createdAt: "desc" } });
-    res.json(tasks);
+    const p = parsePagination(req.query);
+    const [tasks, total] = await Promise.all([
+      prisma.adminTask.findMany({ orderBy: { createdAt: "desc" }, skip: p.skip, take: p.limit }),
+      prisma.adminTask.count(),
+    ]);
+    res.json(paginatedResponse(tasks, total, p));
   } catch (error) {
     log.error({ err: error }, "failed to fetch tasks");
     res.status(500).json({ error: "Failed to fetch tasks" });
@@ -79,7 +94,9 @@ router.patch("/:id/status", authenticateUser, requireStaff, validate(updateTaskS
   const { id } = req.validated.params;
   const { status } = req.validated.body;
   try {
-    const task = await prisma.adminTask.findUnique({ where: { id, assignedToId: req.user.id } });
+    const employeeId = await resolveEmployeeId(req.user.id);
+    if (!employeeId) return res.status(400).json({ error: "No employee profile found." });
+    const task = await prisma.adminTask.findUnique({ where: { id, assignedToId: employeeId } });
     if (!task) return res.status(404).json({ error: "Task not found or not assigned to you" });
     const updatedTask = await prisma.adminTask.update({
       where: { id }, data: { status, updatedAt: new Date() },
