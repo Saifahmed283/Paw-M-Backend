@@ -42,14 +42,6 @@ app.use(express.urlencoded({ extended: true, limit: config.bodyLimit }));
 app.use(cookieParser());
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
-const authLimiter = rateLimit({
-  windowMs: config.rateLimit.windowMs,
-  max: config.rateLimit.authMax,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-});
-
 const sensitiveLimiter = rateLimit({
   windowMs: config.rateLimit.windowMs,
   max: config.rateLimit.sensitiveMax,
@@ -64,12 +56,6 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-app.use("/api/auth/login", authLimiter);
-app.use("/api/auth/register", authLimiter);
-app.use("/api/auth/credentials", authLimiter);
-app.use("/api/client-auth/register", authLimiter);
-app.use("/api/client-auth/login", authLimiter);
-app.use("/api/client-auth/verify", authLimiter);
 app.use("/api/bookings", sensitiveLimiter);
 app.use("/api/orders", sensitiveLimiter);
 app.use("/api/reviews", sensitiveLimiter);
