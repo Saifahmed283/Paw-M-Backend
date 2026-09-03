@@ -11,6 +11,8 @@ export const createProductSchema = z.object({
     petType: z.enum(["dog", "cat", "both"]).optional().default("both"),
     stock: z.number().int().nonnegative(),
     featured: z.boolean().optional().default(false),
+    barcode: z.string().trim().max(128).nullable().optional(),
+    barcodeImage: z.string().max(5_000_000).nullable().optional(),
   }),
 });
 
@@ -26,6 +28,8 @@ export const updateProductSchema = z.object({
     petType: z.enum(["dog", "cat", "both"]).optional(),
     stock: z.number().int().nonnegative().optional(),
     featured: z.boolean().optional(),
+    barcode: z.string().trim().max(128).nullable().optional(),
+    barcodeImage: z.string().max(5_000_000).nullable().optional(),
   }),
 });
 

@@ -82,6 +82,8 @@ router.post("/", authenticateUser, requireAdmin, validate(createProductSchema), 
         petType: sanitizePetType(body.petType),
         stock: body.stock,
         featured: body.featured,
+        barcode: body.barcode?.trim() || null,
+        barcodeImage: body.barcodeImage || null,
       },
     });
     logAudit("product_create", created.id, `Created product ${created.name}`);
@@ -105,6 +107,8 @@ router.patch("/:id", authenticateUser, requireAdmin, validate(updateProductSchem
   if (patch.price !== undefined) data.price = patch.price;
   if (patch.compareAtPrice !== undefined) data.compareAtPrice = patch.compareAtPrice;
   if (patch.stock !== undefined) data.stock = patch.stock;
+  if (patch.barcode !== undefined) data.barcode = patch.barcode?.trim() || null;
+  if (patch.barcodeImage !== undefined) data.barcodeImage = patch.barcodeImage || null;
   try {
     const updated = await prisma.product.update({ where: { id }, data });
     logAudit("product_update", id, `Updated product ${updated.name}`);

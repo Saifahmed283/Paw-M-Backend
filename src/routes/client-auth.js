@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { sendMail } from "../lib/email.js";
+import { sendMail, buildClientVerificationEmail } from "../lib/email.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/client-auth" });
@@ -82,12 +82,8 @@ router.post("/register", async (req, res) => {
     });
 
     try {
-      await sendMail({
-        to: email,
-        subject: "Paw-M — Verify your email",
-        text: `Your verification code is: ${code}\nIt expires in 15 minutes.`,
-        html: `<p>Your verification code is: <strong>${code}</strong></p><p>It expires in 15 minutes.</p>`,
-      });
+      const clinicName = "Paw-M Clinic";
+      await sendMail(buildClientVerificationEmail({ to: email, code, clinicName }));
     } catch (mailErr) {
       log.error({ err: mailErr }, "failed to send verification email");
     }

@@ -216,6 +216,7 @@ model Product {
   minStockAlert  Int      @default(5)     // trigger low-stock alert below this
   featured       Boolean  @default(false)
   barcode        String?  @unique
+  barcodeImage   String?  @default("")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

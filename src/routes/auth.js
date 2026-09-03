@@ -8,7 +8,7 @@ import { logAudit } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
 import { validate } from "../middleware/validate.js";
 import { loginSchema, registerSchema, changeCredentialsSchema } from "../schemas/auth.js";
-import { sendMail } from "../lib/email.js";
+import { sendMail, buildPasswordResetEmail } from "../lib/email.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/auth" });
@@ -206,12 +206,7 @@ router.post("/forgot-password", async (req, res) => {
     });
     const clinicName = config.smtp.fromName || "Paw-M Clinic";
     const to = employee?.email || `${name}@placeholder.invalid`;
-    await sendMail({
-      to,
-      subject: `${clinicName} — Password Reset Code`,
-      text: `Your password reset code is: ${code}\nIt expires in 15 minutes.`,
-      html: `<p>Your password reset code is: <b>${code}</b></p><p>It expires in 15 minutes.</p>`,
-    });
+    await sendMail(buildPasswordResetEmail({ to, code, clinicName }));
 
     logAudit("forgot_password", "", `Reset code requested for: ${name}`);
     res.json(generic);

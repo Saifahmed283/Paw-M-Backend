@@ -9,6 +9,7 @@ import { validate } from "../middleware/validate.js";
 import { createOrderSchema, updateOrderStatusSchema, updateOrderPaymentSchema } from "../schemas/orders.js";
 import { createOrderTransactional, restoreStockOnCancel } from "../services/orders.js";
 import { createBroadcastNotification } from "../lib/notify.js";
+import { attributeSaleToActiveSession } from "../services/session-attribution.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/orders" });
@@ -84,6 +85,9 @@ router.post("/", authenticateClient, validate(createOrderSchema), async (req, re
       body: `${created.customerName} placed an order for EGP ${created.total.toLocaleString()}.`,
       data: { orderId: created.id },
     }).catch(() => {});
+
+    attributeSaleToActiveSession(req, { orders: 1, revenue: created.total }).catch(() => {});
+
     res.status(201).json(created);
   } catch (e) {
     if (e?.status === 400 || e?.status === 409) {

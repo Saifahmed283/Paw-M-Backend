@@ -7,6 +7,7 @@ import { authenticateUser, requireStaff, authenticateClient } from "../middlewar
 import { validate } from "../middleware/validate.js";
 import { createBookingSchema, updateBookingStatusSchema } from "../schemas/bookings.js";
 import { createBroadcastNotification } from "../lib/notify.js";
+import { attributeSaleToActiveSession } from "../services/session-attribution.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/bookings" });
@@ -85,6 +86,10 @@ router.patch("/:id/status", authenticateUser, requireStaff, validate(updateBooki
 
     const updated = await prisma.booking.update({ where: { id }, data: { status } });
     logAudit("booking_status", id, `${updated.ownerName}'s booking → ${status}`);
+
+    if (status === "completed") {
+      attributeSaleToActiveSession(req, { bookings: 1 }).catch(() => {});
+    }
 
     const clinicSettings = await prisma.clinicSettings.findUnique({ where: { id: 1 } }).catch(() => null);
     const clinicName = clinicSettings?.name || "Paw-M Clinic";
