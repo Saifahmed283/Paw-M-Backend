@@ -45,6 +45,41 @@ const SETTINGS = {
   instapay: "",
   googlePlacesKey: "",
   googlePlacesId: "",
+  rolePermissions: {
+    admin: [
+      "overview",
+      "requests",
+      "staff-overview",
+      "payroll",
+      "tasks",
+      "notifications",
+      "reservations",
+      "doctors",
+      "services",
+      "products",
+      "orders",
+      "reviews",
+      "workdays",
+      "archive",
+      "logs",
+      "settings",
+    ],
+    payroll: [
+      "overview",
+      "requests",
+      "notifications",
+      "reservations",
+      "payroll",
+      "doctors",
+      "services",
+      "products",
+      "orders",
+      "reviews",
+      "workdays",
+      "archive",
+    ],
+    staff: ["overview", "requests", "notifications", "tasks", "reservations"],
+  },
 };
 
 const DEMO_SETTINGS = {
@@ -197,7 +232,9 @@ async function main() {
     await prisma.clinicSettings.create({ data: SETTINGS });
   } else if (
     existingSettings.tagline === DEMO_SETTINGS.tagline ||
-    existingSettings.googlePlacesId === DEMO_SETTINGS.googlePlacesId
+    existingSettings.googlePlacesId === DEMO_SETTINGS.googlePlacesId ||
+    !existingSettings.rolePermissions ||
+    Object.keys(existingSettings.rolePermissions).length === 0
   ) {
     await prisma.clinicSettings.update({ where: { id: 1 }, data: SETTINGS });
   }

@@ -25,6 +25,7 @@ router.get("/", async (_req, res) => {
         instapay: "",
         googlePlacesKey: "",
         googlePlacesId: "",
+        rolePermissions: {},
       }
     );
   } catch (e) {
@@ -35,22 +36,24 @@ router.get("/", async (_req, res) => {
 
 router.patch("/", authenticateUser, requireAdmin, validate(updateSettingsSchema), async (req, res) => {
   const patch = req.validated.body;
+  const update = {
+    name: patch.name,
+    tagline: patch.tagline,
+    phone: patch.phone,
+    emergency: patch.emergency,
+    whatsapp: patch.whatsapp,
+    email: patch.email,
+    address: patch.address,
+    currency: patch.currency,
+    instapay: patch.instapay,
+    googlePlacesKey: patch.googlePlacesKey,
+    googlePlacesId: patch.googlePlacesId,
+  };
+  if (patch.rolePermissions !== undefined) update.rolePermissions = patch.rolePermissions;
   try {
     const updated = await prisma.clinicSettings.upsert({
       where: { id: 1 },
-      update: {
-        name: patch.name,
-        tagline: patch.tagline,
-        phone: patch.phone,
-        emergency: patch.emergency,
-        whatsapp: patch.whatsapp,
-        email: patch.email,
-        address: patch.address,
-        currency: patch.currency,
-        instapay: patch.instapay,
-        googlePlacesKey: patch.googlePlacesKey,
-        googlePlacesId: patch.googlePlacesId,
-      },
+      update,
       create: {
         id: 1,
         name: patch.name ?? "Paw-M",
@@ -64,6 +67,9 @@ router.patch("/", authenticateUser, requireAdmin, validate(updateSettingsSchema)
         instapay: patch.instapay ?? "",
         googlePlacesKey: patch.googlePlacesKey ?? "",
         googlePlacesId: patch.googlePlacesId ?? "",
+        ...(patch.rolePermissions !== undefined
+          ? { rolePermissions: patch.rolePermissions }
+          : {}),
       },
     });
     logAudit("settings_update", "", "Clinic settings updated");

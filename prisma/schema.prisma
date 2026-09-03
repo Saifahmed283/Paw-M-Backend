@@ -106,6 +106,7 @@ model ClinicSettings {
   instapay        String   @default("")
   googlePlacesKey String   @default("")
   googlePlacesId  String   @default("")
+  rolePermissions Json     @default("{}")
   updatedAt       DateTime @updatedAt
 }
 

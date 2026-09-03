@@ -13,5 +13,12 @@ export const updateSettingsSchema = z.object({
     instapay: z.string().max(80).optional(),
     googlePlacesKey: z.string().max(200).optional(),
     googlePlacesId: z.string().max(200).optional(),
+    rolePermissions: z
+      .object({
+        admin: z.array(z.string()).optional(),
+        payroll: z.array(z.string()).optional(),
+        staff: z.array(z.string()).optional(),
+      })
+      .optional(),
   }),
 });
