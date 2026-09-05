@@ -26,7 +26,13 @@ router.get("/me", authenticateUser, async (req, res) => {
       }),
       prisma.notification.count({ where }),
     ]);
-    res.json(paginatedResponse(notifications, total, p));
+    const list = notifications.map((n) => ({
+      ...n,
+      isRead: Boolean(
+        employeeId && Array.isArray(n.readBy) && n.readBy.includes(employeeId),
+      ),
+    }));
+    res.json(paginatedResponse(list, total, p));
   } catch (error) {
     log.error({ err: error }, "failed to fetch notifications");
     res.status(500).json({ error: "Failed to fetch notifications" });

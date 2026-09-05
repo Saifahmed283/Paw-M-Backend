@@ -4,7 +4,8 @@ import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { resolveEmployeeId } from "../lib/resolve-employee.js";
 import { authenticateUser, requireAdmin, requireStaff, requirePayrollOrAdmin } from "../middleware/auth.js";
-import { calculatePayrollForPeriod, calculateSessionTotals, calculateBasePay } from "../services/payroll.js";
+import { calculatePayrollForPeriod } from "../services/payroll.js";
+import { computeKpiOverview } from "../services/kpi.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/payroll-extended" });
@@ -38,21 +39,8 @@ router.get("/me/kpi", authenticateUser, requireStaff, async (req, res) => {
     if (!periodStart || !periodEnd) {
       return res.status(400).json({ error: "Missing periodStart or periodEnd" });
     }
-    const sessions = await prisma.workSession.findMany({
-      where: { employeeId, date: { gte: periodStart, lte: periodEnd } },
-    });
-    const totals = calculateSessionTotals(sessions);
-    const employee = await prisma.employee.findUnique({
-      where: { id: employeeId },
-      select: { hourlyRate: true, monthlySalary: true, payRateType: true },
-    });
-    const daysInPeriod = (new Date(periodEnd) - new Date(periodStart)) / (1000 * 60 * 60 * 24) + 1;
-    const basePay = employee ? calculateBasePay(employee, totals.hours, daysInPeriod) : 0;
-    res.json({
-      ...totals,
-      basePay: parseFloat(basePay.toFixed(2)),
-      grossPay: parseFloat((totals.commission + basePay).toFixed(2)),
-    });
+    const [kpi] = await computeKpiOverview({ periodStart, periodEnd, employeeIds: [employeeId] });
+    res.json(kpi ?? null);
   } catch (error) {
     log.error({ err: error }, "failed to calculate KPI");
     res.status(500).json({ error: "Failed to calculate KPI" });
@@ -84,26 +72,30 @@ router.get("/admin/kpi", authenticateUser, requireAdmin, async (req, res) => {
     if (!userId || !periodStart || !periodEnd) {
       return res.status(400).json({ error: "Missing userId, periodStart, or periodEnd" });
     }
-    const sessions = await prisma.workSession.findMany({
-      where: { employeeId: userId, date: { gte: periodStart, lte: periodEnd } },
+    const [kpi] = await computeKpiOverview({
+      periodStart,
+      periodEnd,
+      employeeIds: [String(userId)],
     });
-    const totals = calculateSessionTotals(sessions);
-    const employee = await prisma.employee.findUnique({
-      where: { id: userId },
-      select: { fullName: true, hourlyRate: true, monthlySalary: true, payRateType: true },
-    });
-    const daysInPeriod = (new Date(periodEnd) - new Date(periodStart)) / (1000 * 60 * 60 * 24) + 1;
-    const basePay = employee ? calculateBasePay(employee, totals.hours, daysInPeriod) : 0;
-    res.json({
-      employeeId: userId,
-      employeeName: employee?.fullName || "Unknown",
-      ...totals,
-      basePay: parseFloat(basePay.toFixed(2)),
-      grossPay: parseFloat((totals.commission + basePay).toFixed(2)),
-    });
+    if (!kpi) return res.status(404).json({ error: "Employee not found" });
+    res.json(kpi);
   } catch (error) {
     log.error({ err: error }, "failed to calculate admin KPI");
     res.status(500).json({ error: "Failed to calculate KPI" });
+  }
+});
+
+router.get("/admin/kpis", authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    const { periodStart, periodEnd } = req.query;
+    if (!periodStart || !periodEnd) {
+      return res.status(400).json({ error: "Missing periodStart or periodEnd" });
+    }
+    const result = await computeKpiOverview({ periodStart, periodEnd });
+    res.json({ data: result });
+  } catch (error) {
+    log.error({ err: error }, "failed to calculate admin KPIs");
+    res.status(500).json({ error: "Failed to calculate KPIs" });
   }
 });
 

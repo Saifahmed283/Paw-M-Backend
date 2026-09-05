@@ -98,3 +98,19 @@ export function authenticateClient(req, res, next) {
       return res.status(500).json({ error: "Internal server error" });
     });
 }
+
+/**
+ * Counter / POS middleware: accepts either a store client's bearer token or an
+ * authenticated staff/admin session cookie. Used where a sale may legitimately
+ * be created by a cashier at the counter (no client logged in) as well as by a
+ * store customer during online checkout.
+ */
+export function authenticateClientOrStaff(req, res, next) {
+  if (req.headers.authorization?.startsWith("Bearer ")) {
+    return authenticateClient(req, res, next);
+  }
+  if (req.cookies?.[config.cookieName]) {
+    return authenticateUser(req, res, next);
+  }
+  return res.status(401).json({ error: "Unauthorized — sign in to continue" });
+}

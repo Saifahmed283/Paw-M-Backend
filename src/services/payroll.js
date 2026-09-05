@@ -12,6 +12,57 @@ export function calculateBasePay(employee, hours, daysInPeriod) {
   return hours * employee.hourlyRate;
 }
 
+const now = () => new Date();
+
+/**
+ * Attribute each order to the work session that was active when the order was
+ * created (startedAt <= createdAt <= endedAt ?? now). Sessions that started
+ * later win, so an order is attributed to exactly one session and therefore
+ * one employee — even when two employees' shifts overlap.
+ *
+ * Orders placed outside any session window are left unattributed (they are
+ * not tied to a cashier and stay clinic-level revenue in the workdays view).
+ *
+ * @param {Array<{createdAt: Date, total: number}>} orders
+ * @param {Array<{id: string, startedAt: Date, endedAt: Date|null}>} sessions
+ * @returns {Map<string, {orders: number, revenue: number}>} keyed by session id
+ */
+export function attributeOrderCounts(orders, sessions) {
+  const sorted = [...sessions].sort(
+    (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
+  );
+  const result = new Map();
+  for (const order of orders) {
+    const at = new Date(order.createdAt).getTime();
+    const match = sorted.find((s) => {
+      const start = new Date(s.startedAt).getTime();
+      const end = s.endedAt ? new Date(s.endedAt).getTime() : now().getTime();
+      return at >= start && at <= end;
+    });
+    if (!match) continue;
+    const cur = result.get(match.id) ?? { orders: 0, revenue: 0 };
+    cur.orders += 1;
+    cur.revenue += order.total ?? 0;
+    result.set(match.id, cur);
+  }
+  return result;
+}
+
+/**
+ * Overwrite each matched session's orders/revenue counters with the derived
+ * values so every downstream aggregate (session totals, breakdowns, payroll
+ * records) reflects the actual orders instead of stale live counters.
+ */
+export function applyAttributedOrders(sessions, attributed) {
+  for (const session of sessions) {
+    const a = attributed.get(session.id);
+    if (!a) continue;
+    session.ordersCount = a.orders;
+    session.revenueTotal = a.revenue;
+  }
+  return sessions;
+}
+
 export function calculateSessionTotals(sessions) {
   return sessions.reduce(
     (acc, session) => ({
@@ -56,21 +107,49 @@ export async function calculatePayrollForPeriod(periodStart, periodEnd) {
     },
   });
 
+  const sessions = await prisma.workSession.findMany({
+    where: { date: { gte: periodStart, lte: periodEnd } },
+    orderBy: { startedAt: "asc" },
+  });
+
   const daysInPeriod = (new Date(periodEnd) - new Date(periodStart)) / (1000 * 60 * 60 * 24) + 1;
+
+  // Widen the order window by one day on each side so orders created near the
+  // period boundary still match a session timestamp; window matching keeps them
+  // attributed to the right session only.
+  const shift = (d, n) => {
+    const x = new Date(`${d}T00:00:00Z`);
+    x.setUTCDate(x.getUTCDate() + n);
+    return x.toISOString().slice(0, 10);
+  };
+  const orders = await prisma.order.findMany({
+    where: {
+      status: { not: "cancelled" },
+      archived: false,
+      createdAt: {
+        gte: new Date(`${shift(periodStart, -1)}T00:00:00.000Z`),
+        lte: new Date(`${shift(periodEnd, 1)}T23:59:59.999Z`),
+      },
+    },
+    select: { createdAt: true, total: true },
+  });
+
+  applyAttributedOrders(sessions, attributeOrderCounts(orders, sessions));
+
+  const sessionsByEmployee = new Map();
+  for (const session of sessions) {
+    const list = sessionsByEmployee.get(session.employeeId) ?? [];
+    list.push(session);
+    sessionsByEmployee.set(session.employeeId, list);
+  }
+
   const records = [];
 
   for (const employee of employees) {
-    const sessions = await prisma.workSession.findMany({
-      where: {
-        employeeId: employee.id,
-        date: { gte: periodStart, lte: periodEnd },
-      },
-      orderBy: { startedAt: "asc" },
-    });
+    const empSessions = sessionsByEmployee.get(employee.id) ?? [];
+    if (empSessions.length === 0) continue;
 
-    if (sessions.length === 0) continue;
-
-    const totals = calculateSessionTotals(sessions);
+    const totals = calculateSessionTotals(empSessions);
     const basePay = calculateBasePay(employee, totals.hours, daysInPeriod);
     const commissionPay = totals.commission;
     const netPay = basePay + commissionPay;
@@ -90,7 +169,7 @@ export async function calculatePayrollForPeriod(periodStart, periodEnd) {
       totalDeductions: 0,
       netPay: parseFloat(netPay.toFixed(2)),
       status: "calculated",
-      breakdown: calculateBreakdown(sessions, employee),
+      breakdown: calculateBreakdown(empSessions, employee),
     });
   }
 

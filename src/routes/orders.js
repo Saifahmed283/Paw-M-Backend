@@ -4,7 +4,7 @@ import { logAudit, nextId, fawryReference } from "../lib/utils.js";
 import { validateProofImage } from "../services/orders.js";
 import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
-import { authenticateUser, requireStaff, authenticateClient } from "../middleware/auth.js";
+import { authenticateUser, requireStaff, authenticateClient, authenticateClientOrStaff } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { createOrderSchema, updateOrderStatusSchema, updateOrderPaymentSchema } from "../schemas/orders.js";
 import { createOrderTransactional, restoreStockOnCancel } from "../services/orders.js";
@@ -43,7 +43,7 @@ router.get("/track", async (req, res) => {
   }
 });
 
-router.post("/", authenticateClient, validate(createOrderSchema), async (req, res) => {
+router.post("/", authenticateClientOrStaff, validate(createOrderSchema), async (req, res) => {
   const body = req.validated.body;
   const paymentMethod = body.paymentMethod;
   try {
