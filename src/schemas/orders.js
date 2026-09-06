@@ -9,10 +9,15 @@ export const createOrderSchema = z.object({
     items: z.array(z.object({
       id: z.string().min(1),
       qty: z.number().int().positive(),
+      price: z.number().nonnegative().optional(),
+      name: z.string().max(200).optional(),
     })).min(1, "Cart is empty"),
     paymentMethod: z.enum(["cash", "fawry", "instapay"]).optional().default("cash"),
     paymentRef: z.string().max(120).optional().default(""),
     proofImage: z.string().optional().default(""),
+    source: z.enum(["pos", "store"]).optional().default("store"),
+    discountAmount: z.number().nonnegative().optional().default(0),
+    discountLabel: z.string().max(120).optional().default(""),
   }),
 });
 

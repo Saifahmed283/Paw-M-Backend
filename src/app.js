@@ -31,8 +31,11 @@ if (config.isProduction) {
 }
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
+// In production, restrict to the configured allowlist. In development, reflect
+// the request origin so LAN phones and tunnels (any host/port) work without
+// editing an IP into .env.
 app.use(cors({
-  origin: config.corsOrigins,
+  origin: config.isProduction ? config.corsOrigins : true,
   credentials: true,
 }));
 

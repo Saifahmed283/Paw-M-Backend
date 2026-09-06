@@ -55,7 +55,7 @@ router.post("/", authenticateClientOrStaff, validate(createOrderSchema), async (
 
     const created = await prisma.$transaction(
       async (tx) => {
-        const { total, lines } = await createOrderTransactional(tx, body);
+        const { total, lines, discountAmount, discountLabel } = await createOrderTransactional(tx, body);
         const proofRef = (body.paymentRef || "").trim();
         const isInstaPay = paymentMethod === "instapay";
         const hasProof = Boolean(proofRef) || Boolean(proofImage);
@@ -74,6 +74,9 @@ router.post("/", authenticateClientOrStaff, validate(createOrderSchema), async (
             paymentStatus,
             paymentRef: paymentMethod === "fawry" ? fawryReference() : proofRef.slice(0, 120),
             proofImage: isInstaPay ? proofImage.slice(0, 8_000_000) : "",
+            source: body.source === "pos" ? "pos" : "store",
+            discountAmount,
+            discountLabel,
           },
         });
       },

@@ -243,11 +243,15 @@ model Order {
   proofImage    String        @default("")
   paidAt        DateTime?
   archived      Boolean       @default(false)
+  source        String        @default("store")
+  discountAmount Float        @default(0)
+  discountLabel  String       @default("")
   createdAt     DateTime      @default(now())
 
   @@index([status])
   @@index([paymentStatus])
   @@index([archived])
+  @@index([source])
 }
 
 model Payment {

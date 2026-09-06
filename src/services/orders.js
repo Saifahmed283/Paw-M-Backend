@@ -3,6 +3,9 @@ import { isValidBase64Image, getBase64ByteLength } from "../lib/utils.js";
 
 export async function createOrderTransactional(tx, body) {
   const items = Array.isArray(body.items) ? body.items : [];
+  const isPos = body.source === "pos";
+  const discountAmount = Number(body.discountAmount ?? 0);
+  const discountLabel = String(body.discountLabel ?? "").slice(0, 120);
   let total = 0;
   const lines = [];
 
@@ -19,11 +22,30 @@ export async function createOrderTransactional(tx, body) {
     if (product.stock < qty) {
       throw Object.assign(new Error(`${product.name} — only ${product.stock} left in stock.`), { status: 409 });
     }
-    const price = Number(product.price);
-    total += price * qty;
+
+    // POS orders may supply an override price (discounted) for the line's displayed
+    // price and total. Always validate against the real product price so a discount
+    // can never exceed the catalog price. Store checkout never sends a price override.
+    const dbPrice = Number(product.price);
+    let price = dbPrice;
+    let name = product.name.slice(0, 200);
+    if (isPos && item?.price !== undefined && item?.price !== null) {
+      const candidate = Number(item.price);
+      if (Number.isFinite(candidate) && candidate >= 0 && candidate <= dbPrice) {
+        price = Math.round(candidate * 100) / 100;
+      } else {
+        throw Object.assign(new Error(`${product.name} — invalid line price.`), { status: 400 });
+      }
+      if (typeof item.name === "string" && item.name.trim()) {
+        name = item.name.trim().slice(0, 200);
+      }
+    }
+
+    const lineTotal = price * qty;
+    total += lineTotal;
     lines.push({
       id,
-      name: product.name.slice(0, 200),
+      name,
       price,
       qty,
       image: product.image.slice(0, 500),
@@ -34,7 +56,13 @@ export async function createOrderTransactional(tx, body) {
     });
   }
 
-  return { total: Math.round(total * 100) / 100, lines };
+  // Apply the order-level discount (POS only) after per-line overrides are summed.
+  const cappedDiscount = isPos
+    ? Math.min(Math.max(0, discountAmount), total)
+    : 0;
+  total = Math.round((total - cappedDiscount) * 100) / 100;
+
+  return { total, lines, discountAmount: cappedDiscount, discountLabel };
 }
 
 export function validateProofImage(proofImage) {
