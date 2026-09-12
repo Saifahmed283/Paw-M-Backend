@@ -64,6 +64,7 @@ router.post("/", authenticateClientOrStaff, validate(createOrderSchema), async (
         return tx.order.create({
           data: {
             id: await nextId("ORD", "order"),
+            clientId: req.client?.id ?? null,
             customerName: body.customerName,
             phone: body.phone,
             email: body.email,

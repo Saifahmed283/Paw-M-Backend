@@ -42,31 +42,41 @@ enum StaffRole {
 }
 
 model Booking {
-  id          String        @id @default(cuid())
-  clientId    String?
-  ownerName   String
-  phone       String
-  email       String
-  petName     String
-  animalType  String
-  breed       String
-  age         String
-  weight      String
-  symptoms    String
-  allergies   String
-  medications String
-  doctorId    String
-  doctorName  String
-  date        String
-  time        String
-  emergency   Boolean       @default(false)
-  status      BookingStatus @default(pending)
-  archived    Boolean       @default(false)
-  createdAt   DateTime      @default(now())
+  id              String        @id @default(cuid())
+  clientId        String?
+  client          ClientAccount? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  petId           String?
+  pet             Pet?          @relation(fields: [petId], references: [id], onDelete: SetNull)
+  ownerName       String
+  phone           String
+  email           String
+  petName         String
+  animalType      String
+  breed           String
+  age             String
+  weight          String
+  symptoms        String
+  allergies       String
+  medications     String
+  doctorId        String
+  doctorName      String
+  date            String
+  time            String
+  emergency       Boolean       @default(false)
+  diagnosis       String        @default("")
+  treatmentNotes  String        @default("")
+  followUpDate    String        @default("")
+  status          BookingStatus @default(pending)
+  archived        Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+
+  prescriptions  Prescription[]
 
   @@index([date, doctorId])
   @@index([status])
   @@index([archived])
+  @@index([clientId])
+  @@index([petId])
 }
 
 model Doctor {
@@ -80,8 +90,13 @@ model Doctor {
   initials       String
   tags           String[]
   pets           String[]
+  title          String   @default("")
+  licenseNumber  String   @default("")
+  signatureImage String   @default("")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  prescriptions  Prescription[]
 }
 
 model Service {
@@ -129,6 +144,10 @@ model ClientAccount {
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
   sessions     ClientSession[]
+  pets         Pet[]
+  bookings     Booking[]
+  orders       Order[]
+  prescriptions Prescription[]
 }
 
 model ClientSession {
@@ -230,6 +249,7 @@ model Product {
 model Order {
   id            String        @id @default(cuid())
   clientId      String?
+  client        ClientAccount? @relation(fields: [clientId], references: [id], onDelete: SetNull)
   customerName  String
   phone         String
   email         String
@@ -429,4 +449,58 @@ model AuditLog {
 
   @@index([action])
   @@index([createdAt])
+}
+
+model Pet {
+  id            String          @id @default(cuid())
+  clientId      String
+  client        ClientAccount   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name          String
+  species       String
+  breed         String          @default("")
+  sex           String          @default("") // male | female | neutered_male | spayed_female
+  dob           String          @default("") // YYYY-MM-DD
+  weightKg      String          @default("")
+  color         String          @default("")
+  microchip     String          @default("")
+  photo         String          @default("")
+  notes         String          @default("")
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  bookings      Booking[]
+  prescriptions Prescription[]
+
+  @@index([clientId])
+}
+
+model Prescription {
+  id                String          @id @default(cuid())
+  rxNumber          String          @unique
+  verifyCode        String          @unique
+  petId             String?
+  pet               Pet?            @relation(fields: [petId], references: [id], onDelete: Cascade)
+  clientId          String?
+  client            ClientAccount?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  petName           String          @default("") // snapshot for walk-in patients without a pet file
+  petSpecies        String          @default("")
+  petBreed          String          @default("")
+  doctorId          String
+  doctor            Doctor          @relation(fields: [doctorId], references: [id])
+  bookingId         String?
+  booking           Booking?        @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  diagnosis         String          @default("")
+  items             Json            // [{medication, dose, frequency, route, duration, note}]
+  instructions      String          @default("")
+  followUpDate      String          @default("") // YYYY-MM-DD
+  status            String          @default("issued") // draft | issued | void
+  issuedAt          DateTime?
+  signatureSnapshot Json?           // {name, title, licenseNumber, signatureImage} at time of issue
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([petId])
+  @@index([clientId])
+  @@index([doctorId])
+  @@index([status])
 }

@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "Prescription" ADD COLUMN     "petBreed" TEXT NOT NULL DEFAULT '',
+ADD COLUMN     "petName" TEXT NOT NULL DEFAULT '',
+ADD COLUMN     "petSpecies" TEXT NOT NULL DEFAULT '',
+ALTER COLUMN "petId" DROP NOT NULL,
+ALTER COLUMN "clientId" DROP NOT NULL;

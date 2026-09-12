@@ -1,12 +1,14 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { logAudit } from "../lib/utils.js";
+import { logAudit, isValidBase64Image, getBase64ByteLength } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireAdmin } from "../middleware/auth.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/doctors" });
+
+const MAX_SIGNATURE_BYTES = 1_000_000;
 
 router.get("/", async (req, res) => {
   try {
@@ -32,6 +34,10 @@ router.post("/", authenticateUser, requireAdmin, async (req, res) => {
       return res.status(400).json({ error: "rating must be a number between 0 and 5" });
     }
     if (!name) return res.status(400).json({ error: "name is required" });
+    const signatureImage = String(body.signatureImage ?? "").slice(0, MAX_SIGNATURE_BYTES);
+    if (signatureImage.length > 0 && (!isValidBase64Image(signatureImage) || getBase64ByteLength(signatureImage) > MAX_SIGNATURE_BYTES)) {
+      return res.status(400).json({ error: "Signature must be a valid image under 1 MB" });
+    }
     const created = await prisma.doctor.create({
       data: {
         id: String(body.id ?? `dr-${Date.now().toString(36)}`).slice(0, 60),
@@ -44,6 +50,9 @@ router.post("/", authenticateUser, requireAdmin, async (req, res) => {
         initials: String(body.initials ?? "").slice(0, 6),
         tags: Array.isArray(body.tags) ? body.tags.map((t) => String(t).slice(0, 40)) : [],
         pets: Array.isArray(body.pets) ? body.pets.map((p) => String(p).slice(0, 20)) : [],
+        title: String(body.title ?? "").slice(0, 120),
+        licenseNumber: String(body.licenseNumber ?? "").slice(0, 80),
+        signatureImage,
       },
     });
     logAudit("doctor_create", created.id, `Created doctor ${created.name}`);
@@ -73,6 +82,15 @@ router.patch("/:id", authenticateUser, requireAdmin, async (req, res) => {
   if (patch.initials !== undefined) data.initials = String(patch.initials).slice(0, 6);
   if (patch.tags !== undefined) data.tags = Array.isArray(patch.tags) ? patch.tags.map((t) => String(t).slice(0, 40)) : undefined;
   if (patch.pets !== undefined) data.pets = Array.isArray(patch.pets) ? patch.pets.map((p) => String(p).slice(0, 20)) : undefined;
+  if (patch.title !== undefined) data.title = String(patch.title).slice(0, 120);
+  if (patch.licenseNumber !== undefined) data.licenseNumber = String(patch.licenseNumber).slice(0, 80);
+  if (patch.signatureImage !== undefined) {
+    const signatureImage = String(patch.signatureImage).slice(0, MAX_SIGNATURE_BYTES);
+    if (signatureImage.length > 0 && (!isValidBase64Image(signatureImage) || getBase64ByteLength(signatureImage) > MAX_SIGNATURE_BYTES)) {
+      return res.status(400).json({ error: "Signature must be a valid image under 1 MB" });
+    }
+    data.signatureImage = signatureImage;
+  }
   try {
     const updated = await prisma.doctor.update({ where: { id }, data });
     logAudit("doctor_update", id, `Updated doctor ${updated.name}`);

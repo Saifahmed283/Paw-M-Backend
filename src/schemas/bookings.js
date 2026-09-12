@@ -5,6 +5,7 @@ export const createBookingSchema = z.object({
     ownerName: z.string().min(1).max(120),
     phone: z.string().min(1).max(40),
     email: z.string().max(120).optional().default(""),
+    petId: z.string().max(60).nullable().optional().default(null),
     petName: z.string().min(1).max(80),
     animalType: z.string().max(40),
     breed: z.string().max(60).optional().default(""),
@@ -25,5 +26,14 @@ export const updateBookingStatusSchema = z.object({
   params: z.object({ id: z.string() }),
   body: z.object({
     status: z.enum(["pending", "confirmed", "completed", "cancelled"]),
+  }),
+});
+
+export const updateBookingClinicalSchema = z.object({
+  params: z.object({ id: z.string() }),
+  body: z.object({
+    diagnosis: z.string().max(2000).optional().default(""),
+    treatmentNotes: z.string().max(4000).optional().default(""),
+    followUpDate: z.string().max(20).optional().default(""),
   }),
 });

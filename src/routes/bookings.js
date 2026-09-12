@@ -5,7 +5,7 @@ import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireStaff, authenticateClient } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { createBookingSchema, updateBookingStatusSchema } from "../schemas/bookings.js";
+import { createBookingSchema, updateBookingStatusSchema, updateBookingClinicalSchema } from "../schemas/bookings.js";
 import { createBroadcastNotification } from "../lib/notify.js";
 import { attributeSaleToActiveSession } from "../services/session-attribution.js";
 
@@ -41,9 +41,19 @@ router.post("/", authenticateClient, validate(createBookingSchema), async (req, 
       return res.status(409).json({ error: "This doctor is already booked at the requested date and time. Please choose a different slot." });
     }
 
+    let petId = b.petId ?? null;
+    if (petId) {
+      const pet = await prisma.pet.findUnique({ where: { id: petId } });
+      if (!pet || pet.clientId !== req.client.id) {
+        return res.status(400).json({ error: "Pet not found for this account" });
+      }
+    }
+
     const record = await prisma.booking.create({
       data: {
         id: await nextId("REQ", "booking"),
+        clientId: req.client.id,
+        petId,
         ownerName: b.ownerName,
         phone: b.phone,
         email: b.email,
@@ -120,6 +130,25 @@ router.delete("/:id", authenticateUser, requireStaff, async (req, res) => {
     logAudit("booking_delete", id, `Deleted booking for ${existing?.ownerName ?? "unknown"}`);
     res.status(204).send();
   } catch {
+    res.status(404).json({ error: "Booking not found" });
+  }
+});
+
+router.patch("/:id/clinical", authenticateUser, requireStaff, validate(updateBookingClinicalSchema), async (req, res) => {
+  const { id } = req.validated.params;
+  const { diagnosis, treatmentNotes, followUpDate } = req.validated.body;
+  try {
+    const existing = await prisma.booking.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: "Booking not found" });
+
+    const updated = await prisma.booking.update({
+      where: { id },
+      data: { diagnosis, treatmentNotes, followUpDate },
+    });
+    logAudit("booking_clinical", id, `Clinical record saved for ${updated.petName} · ${updated.doctorName}`);
+    res.json(updated);
+  } catch (e) {
+    log.error({ err: e }, "failed to save booking clinical record");
     res.status(404).json({ error: "Booking not found" });
   }
 });
