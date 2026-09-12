@@ -111,7 +111,7 @@ router.post("/register", validate(registerSchema), async (req, res) => {
     const token = signToken(user);
     setSessionCookie(res, token);
     logAudit("register", "", `Staff account created: ${name}`);
-    res.json({ configured: true, role: user.role });
+    res.json({ configured: true, role: user.role, token });
   } catch (e) {
     log.error({ err: e }, "register failed");
     res.status(500).json({ error: "Failed to create staff account" });
@@ -130,8 +130,10 @@ router.post("/login", validate(loginSchema), async (req, res) => {
       const token = signToken(user);
       setSessionCookie(res, token);
       logAudit("login", "", `Staff sign-in: ${name} [${user.role}]`);
+      res.json({ ok, role: user.role, token });
+    } else {
+      res.json({ ok, role: undefined });
     }
-    res.json({ ok, role: ok ? user.role : undefined });
   } catch (e) {
     log.error({ err: e }, "login failed");
     res.status(500).json({ error: "Failed to verify credentials" });
@@ -144,7 +146,9 @@ router.post("/logout", (_req, res) => {
 });
 
 router.get("/me", async (req, res) => {
-  const token = req.cookies?.[config.cookieName];
+  const authHeader = req.headers.authorization;
+  const token =
+    authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : req.cookies?.[config.cookieName];
   if (!token) return res.json({ authenticated: false });
   try {
     const decoded = jwt.verify(token, config.jwtSecret);
@@ -181,7 +185,7 @@ router.put("/credentials", validate(changeCredentialsSchema), async (req, res) =
     const token = signToken(updated);
     setSessionCookie(res, token);
     logAudit("credentials_update", "", "Staff credentials changed");
-    res.json({ configured: true });
+    res.json({ configured: true, token });
   } catch (e) {
     log.error({ err: e }, "credentials update failed");
     res.status(500).json({ error: "Failed to update credentials" });

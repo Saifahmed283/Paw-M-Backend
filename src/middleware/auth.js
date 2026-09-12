@@ -9,7 +9,13 @@ const log = logger.child({ module: "auth-middleware" });
 const ROLE_HIERARCHY = { staff: 0, payroll: 1, admin: 2 };
 
 export function authenticateUser(req, res, next) {
-  const token = req.cookies?.[config.cookieName];
+  // Accept the staff JWT either from an Authorization: Bearer header (used when
+  // the frontend and API are cross-origin and cookies are unreliable) or from
+  // the same-origin session cookie.
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : req.cookies?.[config.cookieName];
   if (!token) {
     return res.status(401).json({ error: "Unauthorized — no session" });
   }
