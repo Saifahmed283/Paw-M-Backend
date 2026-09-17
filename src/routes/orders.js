@@ -55,7 +55,11 @@ router.post("/", authenticateClientOrStaff, validate(createOrderSchema), async (
 
     const created = await prisma.$transaction(
       async (tx) => {
-        const { total, lines, discountAmount, discountLabel } = await createOrderTransactional(tx, body);
+        // Price overrides / discounts for POS sales are only trusted when the
+        // request is authenticated as staff (req.user). A store customer may
+        // send source:"pos" but never gains override powers.
+        const isPos = Boolean(req.user) && body.source === "pos";
+        const { total, lines, discountAmount, discountLabel } = await createOrderTransactional(tx, body, isPos);
         const proofRef = (body.paymentRef || "").trim();
         const isInstaPay = paymentMethod === "instapay";
         const hasProof = Boolean(proofRef) || Boolean(proofImage);
@@ -75,7 +79,7 @@ router.post("/", authenticateClientOrStaff, validate(createOrderSchema), async (
             paymentStatus,
             paymentRef: paymentMethod === "fawry" ? fawryReference() : proofRef.slice(0, 120),
             proofImage: isInstaPay ? proofImage.slice(0, 8_000_000) : "",
-            source: body.source === "pos" ? "pos" : "store",
+            source: isPos ? "pos" : "store",
             discountAmount,
             discountLabel,
           },

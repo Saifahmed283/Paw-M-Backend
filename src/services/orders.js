@@ -1,9 +1,8 @@
 import { prisma } from "../lib/prisma.js";
 import { isValidBase64Image, getBase64ByteLength } from "../lib/utils.js";
 
-export async function createOrderTransactional(tx, body) {
+export async function createOrderTransactional(tx, body, isPos = false) {
   const items = Array.isArray(body.items) ? body.items : [];
-  const isPos = body.source === "pos";
   const discountAmount = Number(body.discountAmount ?? 0);
   const discountLabel = String(body.discountLabel ?? "").slice(0, 120);
   let total = 0;

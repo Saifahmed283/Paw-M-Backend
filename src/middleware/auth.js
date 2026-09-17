@@ -8,16 +8,48 @@ const log = logger.child({ module: "auth-middleware" });
 
 const ROLE_HIERARCHY = { staff: 0, payroll: 1, admin: 2 };
 
+function timingSafeEqualStrings(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || !a || !b) return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  try {
+    return crypto.timingSafeEqual(bufA, bufB);
+  } catch {
+    return false;
+  }
+}
+
+function isStateChanging(req) {
+  return !["GET", "HEAD", "OPTIONS"].includes(req.method);
+}
+
 export function authenticateUser(req, res, next) {
   // Accept the staff JWT either from an Authorization: Bearer header (used when
   // the frontend and API are cross-origin and cookies are unreliable) or from
   // the same-origin session cookie.
   const authHeader = req.headers.authorization;
-  const token = authHeader?.startsWith("Bearer ")
-    ? authHeader.slice(7)
-    : req.cookies?.[config.cookieName];
+  let token = null;
+  let fromCookie = false;
+  if (authHeader?.startsWith("Bearer ")) {
+    token = authHeader.slice(7);
+  } else {
+    token = req.cookies?.[config.cookieName];
+    fromCookie = true;
+  }
   if (!token) {
     return res.status(401).json({ error: "Unauthorized — no session" });
+  }
+
+  // Cookie-sourced state-changing requests must prove they were not issued
+  // cross-site: the double-submit CSRF cookie must match the X-CSRF-Token
+  // header (fetch cannot read another origin's cookie, so an attacker cannot
+  // forge it). Bearer-header sessions are not cookie-bound and skip this check.
+  if (fromCookie && isStateChanging(req)) {
+    const csrfHeader = String(req.headers["x-csrf-token"] ?? "");
+    if (!timingSafeEqualStrings(csrfHeader, req.cookies?.[config.csrfCookieName])) {
+      return res.status(403).json({ error: "CSRF token mismatch" });
+    }
   }
 
   let decoded;
@@ -113,6 +145,13 @@ export function authenticateClient(req, res, next) {
  */
 export function authenticateClientOrStaff(req, res, next) {
   if (req.headers.authorization?.startsWith("Bearer ")) {
+    const bearer = req.headers.authorization.slice(7);
+    // Staff tokens are JWTs (contain dots); client tokens are opaque hex. Route
+    // each to its own verifier so a cashier's staff session also works as a
+    // Bearer token (cookie fallback below stays for same-origin deployments).
+    if (bearer.includes(".")) {
+      return authenticateUser(req, res, next);
+    }
     return authenticateClient(req, res, next);
   }
   if (req.cookies?.[config.cookieName]) {

@@ -41,6 +41,7 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET || "dev-secret-change-me-in-production",
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "8h",
   cookieName: process.env.COOKIE_NAME || "paw-m-session",
+  csrfCookieName: process.env.CSRF_COOKIE_NAME || "paw-m-csrf-token",
 
   corsOrigins: process.env.CORS_ORIGINS
     ? process.env.CORS_ORIGINS.split(",").map((s) => s.trim())
@@ -67,10 +68,12 @@ export const config = {
   bodyLimit: process.env.BODY_LIMIT || "8mb",
 };
 
-if (config.isProduction && config.jwtSecret === "dev-secret-change-me-in-production") {
-  throw new Error(
-    "FATAL: JWT_SECRET is set to the default value. Set JWT_SECRET environment variable in production."
-  );
+if (config.jwtSecret === "dev-secret-change-me-in-production") {
+  if (config.isProduction || process.env.ALLOW_INSECURE_DEV_SECRET !== "1") {
+    throw new Error(
+      "FATAL: JWT_SECRET is set to the default value. Set the JWT_SECRET environment variable (or, for a local development instance only, set ALLOW_INSECURE_DEV_SECRET=1)."
+    );
+  }
 }
 
 if (config.isProduction && !config.databaseUrl) {

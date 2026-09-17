@@ -77,11 +77,26 @@ function setSessionCookie(res, token) {
     maxAge: parseExpiresInToMs(config.jwtExpiresIn),
     path: "/",
   });
+  // Double-submit CSRF token: readable by same-origin JS (so it can be echoed
+  // in X-CSRF-Token), but unreadable cross-site, which blocks cookie-auth CSRF.
+  res.cookie(config.csrfCookieName, randomBytes(32).toString("hex"), {
+    httpOnly: false,
+    secure: config.isProduction,
+    sameSite: config.isProduction ? "none" : "lax",
+    maxAge: parseExpiresInToMs(config.jwtExpiresIn),
+    path: "/",
+  });
 }
 
 function clearSessionCookie(res) {
   res.clearCookie(config.cookieName, {
     httpOnly: true,
+    secure: config.isProduction,
+    sameSite: config.isProduction ? "none" : "lax",
+    path: "/",
+  });
+  res.clearCookie(config.csrfCookieName, {
+    httpOnly: false,
     secure: config.isProduction,
     sameSite: config.isProduction ? "none" : "lax",
     path: "/",

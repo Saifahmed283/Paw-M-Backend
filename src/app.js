@@ -10,6 +10,10 @@ import { logger } from "./lib/logger.js";
 
 const app = express();
 
+// Trust the immediate reverse-proxy hop (DigitalOcean LB in production) so
+// req.ip (and therefore rate-limit keys) is the real client, not the proxy.
+app.set("trust proxy", 1);
+
 // ── Security headers ─────────────────────────────────────────────────────────
 app.use(helmet({
   contentSecurityPolicy: config.isProduction ? {
@@ -58,6 +62,18 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// Stricter limiter for credential/verification endpoints (login, register,
+// forgot/reset, client register/verify/login). Configured as RATE_LIMIT_AUTH_MAX.
+const authLimiter = rateLimit({
+  windowMs: config.rateLimit.windowMs,
+  max: config.rateLimit.authMax,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use("/api/auth", authLimiter);
+app.use("/api/client-auth", authLimiter);
 
 app.use("/api/bookings", sensitiveLimiter);
 app.use("/api/orders", sensitiveLimiter);
