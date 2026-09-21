@@ -23,3 +23,18 @@ export const changeCredentialsSchema = z.object({
     message: "Nothing to change",
   }),
 });
+
+export const createAccountSchema = z.object({
+  body: z.object({
+    username: z.string().min(3, "Username must be at least 3 characters").transform((v) => v.trim().toLowerCase()),
+    password: z.string().min(6, "Password must be at least 6 characters"),
+    role: z.enum(["admin", "payroll", "staff"]),
+  }),
+});
+
+export const updateAccountRoleSchema = z.object({
+  params: z.object({ id: z.coerce.number().int().positive("Invalid account id") }),
+  body: z.object({
+    role: z.enum(["admin", "payroll", "staff"]),
+  }),
+});

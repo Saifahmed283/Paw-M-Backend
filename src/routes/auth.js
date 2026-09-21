@@ -7,7 +7,8 @@ import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
 import { validate } from "../middleware/validate.js";
-import { loginSchema, registerSchema, changeCredentialsSchema } from "../schemas/auth.js";
+import { authenticateUser, requireAdmin } from "../middleware/auth.js";
+import { loginSchema, registerSchema, changeCredentialsSchema, createAccountSchema, updateAccountRoleSchema } from "../schemas/auth.js";
 import { sendMail, buildPasswordResetEmail } from "../lib/email.js";
 
 const router = Router();
@@ -158,6 +159,59 @@ router.post("/login", validate(loginSchema), async (req, res) => {
 router.post("/logout", (_req, res) => {
   clearSessionCookie(res);
   res.json({ ok: true });
+});
+
+// ---- Account management (admin only) ----
+const ACCOUNT_SELECT = { id: true, username: true, role: true, createdAt: true };
+
+router.get("/accounts", authenticateUser, requireAdmin, async (_req, res) => {
+  try {
+    const accounts = await prisma.adminUser.findMany({
+      select: ACCOUNT_SELECT,
+      orderBy: { id: "asc" },
+    });
+    res.json({ accounts, total: accounts.length });
+  } catch (e) {
+    log.error({ err: e }, "failed to list accounts");
+    res.status(500).json({ error: "Failed to list accounts" });
+  }
+});
+
+router.post("/accounts", authenticateUser, requireAdmin, validate(createAccountSchema), async (req, res) => {
+  const { username, password, role } = req.validated.body;
+  try {
+    const exists = await prisma.adminUser.findUnique({ where: { username } });
+    if (exists) return res.status(409).json({ error: `Username "${username}" already exists.` });
+    const salt = bcrypt.genSaltSync(BCRYPT_ROUNDS);
+    const hash = hashPassword(password, salt);
+    const user = await prisma.adminUser.create({ data: { username, salt, hash, role } });
+    logAudit("create_account", String(user.id), `Account created: ${user.username} (${user.role}) by ${req.user.username}`);
+    res.status(201).json({ id: user.id, username: user.username, role: user.role, createdAt: user.createdAt });
+  } catch (e) {
+    log.error({ err: e }, "failed to create account");
+    res.status(500).json({ error: "Failed to create account" });
+  }
+});
+
+router.patch("/accounts/:id/role", authenticateUser, requireAdmin, validate(updateAccountRoleSchema), async (req, res) => {
+  const { id } = req.validated.params;
+  const { role } = req.validated.body;
+  try {
+    const target = await prisma.adminUser.findUnique({ where: { id }, select: ACCOUNT_SELECT });
+    if (!target) return res.status(404).json({ error: "Account not found" });
+    if (target.role === "admin" && role !== "admin") {
+      const adminCount = await prisma.adminUser.count({ where: { role: "admin" } });
+      if (adminCount <= 1) {
+        return res.status(400).json({ error: "Cannot demote the last admin account." });
+      }
+    }
+    const user = await prisma.adminUser.update({ where: { id }, data: { role }, select: ACCOUNT_SELECT });
+    logAudit("update_account_role", String(user.id), `Role changed ${target.username}: ${target.role} -> ${role} by ${req.user.username}`);
+    res.json(user);
+  } catch (e) {
+    log.error({ err: e }, "failed to update account role");
+    res.status(500).json({ error: "Failed to update account role" });
+  }
 });
 
 router.get("/me", async (req, res) => {
