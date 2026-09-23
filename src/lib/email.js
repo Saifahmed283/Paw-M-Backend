@@ -241,7 +241,7 @@ export function buildBookingConfirmedEmail({ to, ownerName, petName, doctorName,
       { label: "Contact", value: phone, accent: C_AMBER },
     ],
     notes: "If you need to reschedule or cancel, please let us know at least 24 hours before your appointment so we can make the best use of our time.",
-    button: { label: "Book Another Visit", url: config.frontendUrl },
+    button: { label: "Book Another Visit", url: `${config.frontendUrl}/book` },
   });
 }
 
@@ -261,7 +261,7 @@ export function buildBookingCancelledEmail({ to, ownerName, petName, doctorName,
       { label: "Time", value: time, accent: "#b23b3b" },
     ],
     notes: "If this was a mistake or you'd like to rebook, just get in touch — we're happy to help.",
-    button: { label: "Book Again", url: config.frontendUrl },
+    button: { label: "Book Again", url: `${config.frontendUrl}/book` },
   });
 }
 
@@ -308,7 +308,7 @@ export function buildOrderStatusEmail({ to, customerName, orderId, status, clini
       ...itemLines.map((it) => ({ ...it, accent: C_AMBER })),
     ],
     notes: "For any questions, reply to this email or give us a call — we're here to help.",
-    button: { label: "View Your Order", url: config.frontendUrl },
+    button: { label: "View Your Order", url: `${config.frontendUrl}/account` },
   });
 }
 
@@ -327,7 +327,7 @@ export function buildPaymentSuccessEmail({ to, customerName, orderId, amount, me
       { label: "Order ID", value: orderId, accent: C_AMBER },
     ],
     notes: "A receipt is also available in your account. Thank you for choosing us!",
-    button: { label: "Track Your Order", url: config.frontendUrl },
+    button: { label: "Track Your Order", url: `${config.frontendUrl}/account` },
   });
 }
 
@@ -347,7 +347,7 @@ export function buildPaymentFailedEmail({ to, customerName, orderId, method, cli
       { label: "Order ID", value: orderId, accent: "#b23b3b" },
     ],
     notes: "No worries — this happens. Please submit a new payment proof or contact us and we'll get it sorted right away.",
-    button: { label: "Try Again", url: config.frontendUrl },
+    button: { label: "Try Again", url: `${config.frontendUrl}/account` },
   });
 }
 
@@ -376,6 +376,20 @@ export function buildPasswordResetEmail({ to, code, clinicName }) {
     message: `Hi,<br/>You asked to reset your <strong>${clinic}</strong> password. Use the one-time code below to continue.`,
     details: [{ label: "Reset Code", value: code, accent: C_BRASS }],
     notes: "This code expires in <strong>15 minutes</strong>. If you didn't request it, you can ignore this email.",
+  });
+}
+
+export function buildClientNotifyEmail({ to, clientName, title, body, clinicName }) {
+  const clinic = escapeHtml(clinicName);
+  return buildMail({
+    to,
+    clinicName,
+    subject: `${escapeHtml(title)} — ${clinic}`,
+    preheader: `${escapeHtml(title)} — a message from ${clinic}.`,
+    heading: "A Message From the Clinic",
+    message: `Hi <strong>${escapeHtml(clientName)}</strong>,<br/><strong>${escapeHtml(title)}</strong><br/><div style="padding:12px 16px;background:#fff8ec;border-radius:10px;border:1px solid #f0e0b8;">${escapeHtml(body).replace(/\n/g, "<br/>")}</div>`,
+    notes: "You can view this message any time in your account. For questions, reply to this email or call the clinic.",
+    button: { label: "Open My Account", url: `${config.frontendUrl}/account` },
   });
 }
 

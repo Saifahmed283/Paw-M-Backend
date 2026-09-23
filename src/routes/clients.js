@@ -2,7 +2,11 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
-import { authenticateUser, requirePayrollOrAdmin } from "../middleware/auth.js";
+import { authenticateUser, requireAdmin, requirePayrollOrAdmin } from "../middleware/auth.js";
+import { validate } from "../middleware/validate.js";
+import { notifyClientSchema, updateClientSchema } from "../schemas/clients.js";
+import { sendMail, buildClientNotifyEmail } from "../lib/email.js";
+import { logAudit } from "../lib/utils.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/clients" });
@@ -64,6 +68,8 @@ router.get("/", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
           fullName: true,
           email: true,
           phone: true,
+          suspended: true,
+          suspendedAt: true,
           createdAt: true,
           updatedAt: true,
           _count: { select: { pets: true, bookings: true, orders: true } },
@@ -103,6 +109,8 @@ router.get("/", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
         fullName: c.fullName,
         email: c.email,
         phone: c.phone,
+        suspended: c.suspended,
+        suspendedAt: c.suspendedAt,
         createdAt: c.createdAt,
         updatedAt: c.updatedAt,
         type: classifyClient(bookingsCount, ordersCount),
@@ -127,7 +135,16 @@ router.get("/:id", authenticateUser, requirePayrollOrAdmin, async (req, res) => 
   try {
     const client = await prisma.clientAccount.findUnique({
       where: { id },
-      select: { id: true, fullName: true, email: true, phone: true, createdAt: true, updatedAt: true },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        phone: true,
+        suspended: true,
+        suspendedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
     if (!client) return res.status(404).json({ error: "Client not found" });
 
@@ -214,5 +231,107 @@ router.get("/:id", authenticateUser, requirePayrollOrAdmin, async (req, res) => 
     res.status(500).json({ error: "Failed to load client detail" });
   }
 });
+
+// PATCH /api/clients/:id — suspend or re-activate a client account
+router.patch(
+  "/:id",
+  authenticateUser,
+  requireAdmin,
+  validate(updateClientSchema),
+  async (req, res) => {
+    const { id } = req.params;
+    const { suspended } = req.validated.body;
+    try {
+      const client = await prisma.clientAccount.findUnique({ where: { id } });
+      if (!client) return res.status(404).json({ error: "Client not found" });
+
+      const nextValue = suspended ?? client.suspended;
+      const updated = await prisma.clientAccount.update({
+        where: { id },
+        data: {
+          suspended: nextValue,
+          suspendedAt: nextValue ? new Date() : null,
+        },
+        select: { id: true, fullName: true, email: true, suspended: true, suspendedAt: true },
+      });
+
+      // Invalidate any live sessions so a suspended client is signed out immediately.
+      if (nextValue) {
+        await prisma.clientSession.deleteMany({ where: { clientId: id } });
+      }
+
+      logAudit(
+        nextValue ? "suspend_client" : "unsuspend_client",
+        id,
+        `${updated.fullName} ${nextValue ? "suspended" : "re-activated"} by ${req.user.username}`,
+      );
+      res.json(updated);
+    } catch (e) {
+      log.error({ err: e }, "failed to update client");
+      res.status(500).json({ error: "Failed to update client" });
+    }
+  },
+);
+
+// DELETE /api/clients/:id — permanently delete a client account and its records
+router.delete("/:id", authenticateUser, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const client = await prisma.clientAccount.findUnique({
+      where: { id },
+      select: { id: true, fullName: true, email: true },
+    });
+    if (!client) return res.status(404).json({ error: "Client not found" });
+
+    await prisma.clientAccount.delete({ where: { id } });
+    logAudit("delete_client", id, `${client.fullName} deleted by ${req.user.username}`);
+    res.json({ success: true });
+  } catch (e) {
+    log.error({ err: e }, "failed to delete client");
+    res.status(500).json({ error: "Failed to delete client" });
+  }
+});
+
+// POST /api/clients/:id/notify — send an in-app + email message to the client
+router.post(
+  "/:id/notify",
+  authenticateUser,
+  requirePayrollOrAdmin,
+  validate(notifyClientSchema),
+  async (req, res) => {
+    const { id } = req.params;
+    const { title, body } = req.validated.body;
+    try {
+      const client = await prisma.clientAccount.findUnique({
+        where: { id },
+        select: { id: true, email: true, fullName: true, suspended: true },
+      });
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (client.suspended) {
+        return res.status(400).json({ error: "Cannot notify a suspended client." });
+      }
+
+      const notification = await prisma.clientNotification.create({
+        data: { clientId: id, title, body },
+      });
+
+      const mailResult = await sendMail(
+        buildClientNotifyEmail({
+          to: client.email,
+          clientName: client.fullName,
+          title,
+          body,
+          clinicName: "Paw-M Veterinary Clinic",
+        }),
+      );
+
+      logAudit("notify_client", id, `${client.fullName} notified by ${req.user.username}`);
+      res.status(201).json({ notification, mail: mailResult });
+    } catch (e) {
+      log.error({ err: e }, "failed to notify client");
+      res.status(500).json({ error: "Failed to notify client" });
+    }
+  },
+);
 
 export default router;

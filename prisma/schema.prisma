@@ -143,6 +143,8 @@ model ClientAccount {
   salt         String
   fullName     String
   phone        String          @default("")
+  suspended    Boolean         @default(false)
+  suspendedAt  DateTime?
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
   sessions     ClientSession[]
@@ -151,6 +153,19 @@ model ClientAccount {
   orders       Order[]
   payments     Payment[]
   prescriptions Prescription[]
+  notifications ClientNotification[]
+}
+
+model ClientNotification {
+  id        String        @id @default(cuid())
+  clientId  String
+  client    ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  isRead    Boolean       @default(false)
+  createdAt DateTime      @default(now())
+
+  @@index([clientId, isRead])
 }
 
 model ClientSession {

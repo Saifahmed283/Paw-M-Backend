@@ -47,7 +47,7 @@ export const config = {
     ? process.env.CORS_ORIGINS.split(",").map((s) => s.trim())
     : ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
 
-  frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
+  frontendUrl: process.env.FRONTEND_URL || "https://pawmclinnic.com",
 
   smtp: {
     host: process.env.SMTP_HOST || "smtp.gmail.com",

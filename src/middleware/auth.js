@@ -121,12 +121,15 @@ export function authenticateClient(req, res, next) {
       }
       return prisma.clientAccount.findUnique({
         where: { id: session.clientId },
-        select: { id: true, email: true, fullName: true },
+        select: { id: true, email: true, fullName: true, suspended: true },
       });
     })
     .then((client) => {
       if (!client) {
         return res.status(401).json({ error: "Client account not found" });
+      }
+      if (client.suspended) {
+        return res.status(403).json({ error: "Account suspended — contact the clinic" });
       }
       req.client = client;
       next();

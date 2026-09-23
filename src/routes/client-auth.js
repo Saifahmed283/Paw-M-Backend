@@ -170,6 +170,9 @@ router.post("/login", async (req, res) => {
     if (!client) {
       return res.status(401).json({ error: "Invalid email or password." });
     }
+    if (client.suspended) {
+      return res.status(403).json({ error: "Account suspended — contact the clinic." });
+    }
 
     const valid = bcrypt.compareSync(password, client.passwordHash);
     if (!valid) {
