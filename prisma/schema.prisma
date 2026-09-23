@@ -71,6 +71,7 @@ model Booking {
   createdAt       DateTime      @default(now())
 
   prescriptions  Prescription[]
+  payments       Payment[]
 
   @@index([date, doctorId])
   @@index([status])
@@ -104,6 +105,7 @@ model Service {
   icon        String
   title       String
   description String
+  price       Float    @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
@@ -147,6 +149,7 @@ model ClientAccount {
   pets         Pet[]
   bookings     Booking[]
   orders       Order[]
+  payments     Payment[]
   prescriptions Prescription[]
 }
 
@@ -275,18 +278,42 @@ model Order {
 }
 
 model Payment {
-  id        String        @id @default(cuid())
-  title     String
-  amount    Float
-  method    PaymentMethod @default(cash)
-  status    PaymentStatus @default(unpaid)
-  date      String
-  notes     String        @default("")
-  orderId   String        @default("")
-  createdAt DateTime      @default(now())
+  id          String        @id @default(cuid())
+  title       String
+  amount      Float
+  method      PaymentMethod @default(cash)
+  status      PaymentStatus @default(unpaid)
+  date        String
+  notes       String        @default("")
+  orderId     String        @default("")
+  clientId    String?
+  client      ClientAccount? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  bookingId   String?
+  booking     Booking?       @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  kind        String        @default("order") // order | visit | manual
+  requestedBy String        @default("")
+  createdAt   DateTime      @default(now())
+
+  items PaymentItem[]
 
   @@index([status])
   @@index([date])
+  @@index([kind])
+  @@index([clientId])
+  @@index([bookingId])
+}
+
+model PaymentItem {
+  id          String  @id @default(cuid())
+  paymentId   String
+  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  label       String
+  amount      Float
+  kind        String  @default("service") // service | product | other
+  referenceId String  @default("")
+  createdAt   DateTime @default(now())
+
+  @@index([paymentId])
 }
 
 model WorkSession {

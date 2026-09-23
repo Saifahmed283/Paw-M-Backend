@@ -31,6 +31,7 @@ router.post("/", authenticateUser, requireAdmin, async (req, res) => {
         icon: String(body.icon ?? "Stethoscope").slice(0, 40),
         title: String(body.title ?? "").slice(0, 120),
         description: String(body.description ?? "").slice(0, 2000),
+        price: typeof body.price === "number" && Number.isFinite(body.price) ? Math.max(0, Math.round(body.price * 100) / 100) : 0,
       },
     });
     logAudit("service_create", created.slug, `Created service ${created.title}`);
@@ -48,6 +49,9 @@ router.patch("/:slug", authenticateUser, requireAdmin, async (req, res) => {
   if (patch.icon !== undefined) data.icon = String(patch.icon).slice(0, 40);
   if (patch.title !== undefined) data.title = String(patch.title).slice(0, 120);
   if (patch.description !== undefined) data.description = String(patch.description).slice(0, 2000);
+  if (patch.price !== undefined && typeof patch.price === "number") {
+    data.price = Math.max(0, Math.round(patch.price * 100) / 100);
+  }
   try {
     const updated = await prisma.service.update({ where: { slug }, data });
     logAudit("service_update", slug, `Updated service ${updated.title}`);

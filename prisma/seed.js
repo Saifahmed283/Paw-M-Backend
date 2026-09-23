@@ -18,18 +18,18 @@ const DOCTORS = [
 ];
 
 const SERVICES = [
-  { slug: "general-checkup", icon: "Stethoscope", title: "Veterinary Consultation & Health Checkup", description: "Comprehensive physical exams and wellness assessments for all pets." },
-  { slug: "vaccination", icon: "Syringe", title: "Vaccinations for Dogs & Cats", description: "Core and lifestyle vaccination protocols for dogs and cats of all ages." },
-  { slug: "surgery", icon: "Scissors", title: "Surgery", description: "Routine and advanced surgical procedures including soft-tissue and orthopaedic surgery." },
-  { slug: "spay-neuter", icon: "Heart", title: "Spaying & Neutering", description: "Safe spay and neuter procedures with post-operative care instructions." },
-  { slug: "dental", icon: "Sparkles", title: "Dental Care", description: "Dental scaling, polishing and extractions under monitored anaesthesia." },
-  { slug: "laboratory", icon: "FlaskConical", title: "Laboratory & Blood Tests", description: "In-house bloodwork and laboratory diagnostics with same-visit results." },
-  { slug: "pharmacy", icon: "Pill", title: "Pharmacy", description: "On-site dispensing with dosage verified against your pet's treatment chart." },
-  { slug: "grooming", icon: "Bath", title: "Grooming", description: "Medicated baths, nail trims and coat care supervised by clinical staff." },
-  { slug: "boarding", icon: "Home", title: "Boarding", description: "Safe and comfortable pet boarding with daily check-ups by our veterinary team." },
-  { slug: "parasite", icon: "Bug", title: "Parasite Treatment", description: "Prevention and treatment for fleas, ticks, worms and other internal parasites." },
-  { slug: "microchip", icon: "Cpu", title: "Microchipping", description: "ISO-standard microchip implantation and national registry registration." },
-  { slug: "exotics", icon: "Bird", title: "Birds & Exotic Animals", description: "Specialised care for birds, rabbits, reptiles and exotic companion species." },
+  { slug: "general-checkup", icon: "Stethoscope", title: "Veterinary Consultation & Health Checkup", description: "Comprehensive physical exams and wellness assessments for all pets.", price: 300 },
+  { slug: "vaccination", icon: "Syringe", title: "Vaccinations for Dogs & Cats", description: "Core and lifestyle vaccination protocols for dogs and cats of all ages.", price: 400 },
+  { slug: "surgery", icon: "Scissors", title: "Surgery", description: "Routine and advanced surgical procedures including soft-tissue and orthopaedic surgery.", price: 2000 },
+  { slug: "spay-neuter", icon: "Heart", title: "Spaying & Neutering", description: "Safe spay and neuter procedures with post-operative care instructions.", price: 1800 },
+  { slug: "dental", icon: "Sparkles", title: "Dental Care", description: "Dental scaling, polishing and extractions under monitored anaesthesia.", price: 900 },
+  { slug: "laboratory", icon: "FlaskConical", title: "Laboratory & Blood Tests", description: "In-house bloodwork and laboratory diagnostics with same-visit results.", price: 250 },
+  { slug: "pharmacy", icon: "Pill", title: "Pharmacy", description: "On-site dispensing with dosage verified against your pet's treatment chart.", price: 0 },
+  { slug: "grooming", icon: "Bath", title: "Grooming", description: "Medicated baths, nail trims and coat care supervised by clinical staff.", price: 350 },
+  { slug: "boarding", icon: "Home", title: "Boarding", description: "Safe and comfortable pet boarding with daily check-ups by our veterinary team.", price: 250 },
+  { slug: "parasite", icon: "Bug", title: "Parasite Treatment", description: "Prevention and treatment for fleas, ticks, worms and other internal parasites.", price: 200 },
+  { slug: "microchip", icon: "Cpu", title: "Microchipping", description: "ISO-standard microchip implantation and national registry registration.", price: 500 },
+  { slug: "exotics", icon: "Bird", title: "Birds & Exotic Animals", description: "Specialised care for birds, rabbits, reptiles and exotic companion species.", price: 350 },
 ];
 
 const SETTINGS = {
@@ -54,6 +54,7 @@ const SETTINGS = {
       "tasks",
       "notifications",
       "reservations",
+      "clients",
       "doctors",
       "services",
       "products",
@@ -69,6 +70,7 @@ const SETTINGS = {
       "requests",
       "notifications",
       "reservations",
+      "clients",
       "payroll",
       "doctors",
       "services",

@@ -9,7 +9,7 @@ const log = logger.child({ module: "routes/me" });
 router.get("/", authenticateClient, async (req, res) => {
   const clientId = req.client.id;
   try {
-    const [client, pets, bookings, orders, prescriptions] = await Promise.all([
+    const [client, pets, bookings, orders, prescriptions, payments] = await Promise.all([
       prisma.clientAccount.findUnique({
         where: { id: clientId },
         select: { id: true, email: true, fullName: true, phone: true, createdAt: true },
@@ -31,8 +31,13 @@ router.get("/", authenticateClient, async (req, res) => {
           doctor: { select: { id: true, name: true, title: true, specialization: true } },
         },
       }),
+      prisma.payment.findMany({
+        where: { clientId },
+        orderBy: { createdAt: "desc" },
+        include: { items: { orderBy: { createdAt: "asc" } } },
+      }),
     ]);
-    res.json({ client, pets, bookings, orders, prescriptions });
+    res.json({ client, pets, bookings, orders, prescriptions, payments });
   } catch (e) {
     log.error({ err: e }, "failed to fetch client profile");
     res.status(500).json({ error: "Failed to fetch profile" });
