@@ -4,6 +4,7 @@ import {
   applyAttributedOrders,
   calculateBasePay,
   calculateSessionTotals,
+  commissionForEmployee,
 } from "./payroll.js";
 
 function shiftDate(dateStr, days) {
@@ -36,6 +37,7 @@ export async function computeKpiOverview({ periodStart, periodEnd, employeeIds }
       hourlyRate: true,
       monthlySalary: true,
       payRateType: true,
+      commissionRates: true,
     },
   });
 
@@ -80,12 +82,14 @@ export async function computeKpiOverview({ periodStart, periodEnd, employeeIds }
   return employees.map((employee) => {
     const totals = calculateSessionTotals(sessionsByEmployee.get(employee.id) ?? []);
     const basePay = calculateBasePay(employee, totals.hours, daysInPeriod);
+    const commission = commissionForEmployee(employee, totals.revenue);
     return {
       employeeId: employee.id,
       employeeName: employee.fullName,
       ...totals,
+      commission: parseFloat(commission.toFixed(2)),
       basePay: parseFloat(basePay.toFixed(2)),
-      grossPay: parseFloat((totals.commission + basePay).toFixed(2)),
+      grossPay: parseFloat((commission + basePay).toFixed(2)),
     };
   });
 }

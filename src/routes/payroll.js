@@ -2,12 +2,44 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
-import { authenticateUser, requireAdmin, requirePayrollOrAdmin } from "../middleware/auth.js";
+import {
+  authenticateUser,
+  requireAdmin,
+  requirePayrollOrAdmin,
+} from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { calculatePayrollSchema, payrollRecordStatusSchema, payrollRecordAmountSchema, bonusDeductionRequestSchema, reviewRequestSchema } from "../schemas/payroll.js";
+import {
+  calculatePayrollSchema,
+  payrollRecordStatusSchema,
+  payrollRecordAmountSchema,
+  bonusDeductionRequestSchema,
+  reviewRequestSchema,
+} from "../schemas/payroll.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/payroll" });
+
+// Allowed status transitions. Each edge lists the roles that may perform it.
+// `calculated` records are drafts; only admins review, approve, or pay a record.
+const TRANSITIONS = {
+  calculated: {
+    pending_approval: ["payroll", "admin"],
+  },
+  pending_approval: {
+    approved: ["admin"],
+    rejected: ["admin"],
+  },
+  approved: {
+    paid: ["admin"],
+  },
+  paid: {},
+  rejected: {},
+};
+
+function isTransitionAllowed(from, to, role) {
+  const allowed = TRANSITIONS[from]?.[to];
+  return Array.isArray(allowed) && allowed.includes(role);
+}
 
 router.get("/records", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
   try {
@@ -49,19 +81,35 @@ router.get("/records/:id", authenticateUser, requirePayrollOrAdmin, async (req, 
   }
 });
 
-router.patch("/records/:id/status", authenticateUser, requireAdmin, validate(payrollRecordStatusSchema), async (req, res) => {
+router.patch("/records/:id/status", authenticateUser, requirePayrollOrAdmin, validate(payrollRecordStatusSchema), async (req, res) => {
   try {
     const { id } = req.validated.params;
     const { status } = req.validated.body;
-    const record = await prisma.payrollRecord.update({
+    const record = await prisma.payrollRecord.findUnique({ where: { id } });
+    if (!record) return res.status(404).json({ error: "Payroll record not found" });
+
+    if (record.status === status) {
+      return res.status(400).json({ error: `Record is already ${status}` });
+    }
+    if (!isTransitionAllowed(record.status, status, req.user.role)) {
+      return res
+        .status(403)
+        .json({
+          error: `Forbidden — cannot move record from ${record.status} to ${status} as ${req.user.role}`,
+        });
+    }
+
+    const updated = await prisma.payrollRecord.update({
       where: { id },
       data: {
         status,
-        ...(status === "approved" ? { approvedBy: req.user.username, approvedAt: new Date() } : {}),
+        ...(status === "approved"
+          ? { approvedBy: req.user.username, approvedAt: new Date() }
+          : {}),
         ...(status === "paid" ? { paidAt: new Date() } : {}),
       },
     });
-    res.json(record);
+    res.json(updated);
   } catch (error) {
     log.error({ err: error }, "failed to update payroll record status");
     res.status(500).json({ error: "Failed to update payroll record" });
@@ -101,16 +149,8 @@ router.post("/:recordId/bonus-request", authenticateUser, requirePayrollOrAdmin,
     const { amount, reason, workSessionId } = req.validated.body;
     const payrollRecord = await prisma.payrollRecord.findUnique({ where: { id: recordId }, include: { employee: true } });
     if (!payrollRecord) return res.status(404).json({ error: "Payroll record not found" });
-    if (req.user.role === "payroll") {
-      const payrollUser = await prisma.adminUser.findUnique({ where: { id: req.user.id } });
-      const employee = payrollUser
-        ? await prisma.employee.findFirst({
-            where: { OR: [{ email: payrollUser.username }, { email: { startsWith: payrollUser.username + "@" } }] },
-          })
-        : null;
-      if (!employee || payrollRecord.employeeId !== employee.id) {
-        return res.status(403).json({ error: "Forbidden — can only request bonuses for your own employees" });
-      }
+    if (payrollRecord.status === "paid") {
+      return res.status(400).json({ error: "Cannot change a paid record" });
     }
     const bonusRequest = await prisma.bonusDeductionRequest.create({
       data: {
@@ -132,16 +172,8 @@ router.post("/:recordId/deduction-request", authenticateUser, requirePayrollOrAd
     const { amount, reason, workSessionId } = req.validated.body;
     const payrollRecord = await prisma.payrollRecord.findUnique({ where: { id: recordId }, include: { employee: true } });
     if (!payrollRecord) return res.status(404).json({ error: "Payroll record not found" });
-    if (req.user.role === "payroll") {
-      const payrollUser = await prisma.adminUser.findUnique({ where: { id: req.user.id } });
-      const employee = payrollUser
-        ? await prisma.employee.findFirst({
-            where: { OR: [{ email: payrollUser.username }, { email: { startsWith: payrollUser.username + "@" } }] },
-          })
-        : null;
-      if (!employee || payrollRecord.employeeId !== employee.id) {
-        return res.status(403).json({ error: "Forbidden — can only request deductions for your own employees" });
-      }
+    if (payrollRecord.status === "paid") {
+      return res.status(400).json({ error: "Cannot change a paid record" });
     }
     const deductionRequest = await prisma.bonusDeductionRequest.create({
       data: {
@@ -157,7 +189,7 @@ router.post("/:recordId/deduction-request", authenticateUser, requirePayrollOrAd
   }
 });
 
-router.get("/:recordId/requests", authenticateUser, requireAdmin, async (req, res) => {
+router.get("/:recordId/requests", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
   try {
     const { recordId } = req.params;
     const { type } = req.query;
@@ -187,7 +219,6 @@ router.patch("/requests/:requestId", authenticateUser, requireAdmin, validate(re
     const { status, adminComment } = req.validated.body;
     const request = await prisma.bonusDeductionRequest.findUnique({
       where: { id: requestId },
-      include: { payrollRecord: true },
     });
     if (!request) return res.status(404).json({ error: "Request not found" });
 
@@ -196,23 +227,25 @@ router.patch("/requests/:requestId", authenticateUser, requireAdmin, validate(re
       data: { status, reviewedBy: req.user.username, reviewedAt: new Date(), adminComment: adminComment || null },
     });
 
-    if (status === "approved") {
-      const approvedRequests = await prisma.bonusDeductionRequest.findMany({
-        where: { payrollRecordId: request.payrollRecordId, status: "approved" },
-      });
-      const totalBonuses = approvedRequests.filter((r) => r.type === "bonus").reduce((sum, r) => sum + r.amount, 0);
-      const totalDeductions = approvedRequests.filter((r) => r.type === "deduction").reduce((sum, r) => sum + r.amount, 0);
-      await prisma.payrollRecord.update({
-        where: { id: request.payrollRecordId },
-        data: {
-          totalBonuses: parseFloat(totalBonuses.toFixed(2)),
-          totalDeductions: parseFloat(totalDeductions.toFixed(2)),
-          netPay: parseFloat(
-            (request.payrollRecord.basePay + request.payrollRecord.commissionPay + totalBonuses - totalDeductions).toFixed(2)
-          ),
-        },
-      });
-    }
+    // Recompute the record's bonuses/deductions/net from the approved set
+    // whether this review approves or rejects, so reverting a decision does not
+    // leave stale totals behind.
+    const approvedRequests = await prisma.bonusDeductionRequest.findMany({
+      where: { payrollRecordId: request.payrollRecordId, status: "approved" },
+    });
+    const totalBonuses = approvedRequests.filter((r) => r.type === "bonus").reduce((sum, r) => sum + r.amount, 0);
+    const totalDeductions = approvedRequests.filter((r) => r.type === "deduction").reduce((sum, r) => sum + r.amount, 0);
+    const fresh = await prisma.payrollRecord.findUnique({ where: { id: request.payrollRecordId } });
+    await prisma.payrollRecord.update({
+      where: { id: request.payrollRecordId },
+      data: {
+        totalBonuses: parseFloat(totalBonuses.toFixed(2)),
+        totalDeductions: parseFloat(totalDeductions.toFixed(2)),
+        netPay: parseFloat(
+          ((fresh?.basePay ?? 0) + (fresh?.commissionPay ?? 0) + totalBonuses - totalDeductions).toFixed(2)
+        ),
+      },
+    });
     res.json(updatedRequest);
   } catch (error) {
     log.error({ err: error }, "failed to update request");

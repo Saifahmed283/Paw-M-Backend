@@ -126,10 +126,57 @@ router.post("/calculate", authenticateUser, requirePayrollOrAdmin, async (req, r
     }
     const records = await calculatePayrollForPeriod(periodStart, periodEnd);
     const enriched = records.map((r) => ({ ...r, calculatedBy: req.user.username }));
-    const savedRecords = await prisma.$transaction(
-      enriched.map((record) => prisma.payrollRecord.create({ data: record }))
+
+    // Upsert per employee + period so recalculating never creates duplicates.
+    // Only "calculated" records are refreshed; anything already submitted,
+    // approved, paid, or rejected keeps its locked amounts and is skipped.
+    const existing = await prisma.payrollRecord.findMany({
+      where: {
+        periodStart,
+        periodEnd,
+        status: "calculated",
+      },
+      select: {
+        id: true,
+        employeeId: true,
+        totalBonuses: true,
+        totalDeductions: true,
+      },
+    });
+    const existingByEmployee = new Map(existing.map((e) => [e.employeeId, e]));
+
+    const saved = await prisma.$transaction(
+      enriched.map((record) => {
+        const match = existingByEmployee.get(record.employeeId);
+        if (match) {
+          // Preserve any approved bonuses/deductions already applied to the draft
+          // and fold them back into the refreshed net pay.
+          const netPay =
+            record.basePay +
+            record.commissionPay +
+            match.totalBonuses -
+            match.totalDeductions;
+          return prisma.payrollRecord.update({
+            where: { id: match.id },
+            data: {
+              totalSessions: record.totalSessions,
+              totalHours: record.totalHours,
+              totalBookings: record.totalBookings,
+              totalOrders: record.totalOrders,
+              totalRevenue: record.totalRevenue,
+              basePay: record.basePay,
+              commissionPay: record.commissionPay,
+              netPay: parseFloat(netPay.toFixed(2)),
+              breakdown: record.breakdown,
+              calculatedBy: record.calculatedBy,
+            },
+          });
+        }
+        return prisma.payrollRecord.create({ data: record });
+      }),
     );
-    res.json({ records: savedRecords, count: savedRecords.length });
+
+    res.json({ records: saved, count: saved.length, recalculated: existing.length });
   } catch (error) {
     log.error({ err: error }, "failed to calculate payroll");
     res.status(500).json({ error: "Failed to calculate payroll" });

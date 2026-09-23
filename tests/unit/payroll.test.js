@@ -4,6 +4,8 @@ import {
   calculateBasePay,
   calculateSessionTotals,
   calculateBreakdown,
+  effectiveCommissionRate,
+  commissionForEmployee,
 } from "../../src/services/payroll.js";
 
 describe("payroll service", () => {
@@ -41,6 +43,26 @@ describe("payroll service", () => {
     it("calculates monthly pay for single day", () => {
       const employee = { payRateType: "monthly", hourlyRate: 0, monthlySalary: 3000 };
       expect(calculateBasePay(employee, 0, 1)).toBe(100);
+    });
+  });
+
+  describe("commission helpers", () => {
+    it("returns 0 for empty or missing commission rates", () => {
+      expect(effectiveCommissionRate({})).toBe(0);
+      expect(effectiveCommissionRate({ commissionRates: {} })).toBe(0);
+      expect(effectiveCommissionRate(null)).toBe(0);
+    });
+
+    it("averages configured per-category rates", () => {
+      const employee = { commissionRates: { "spay-neuter": 10, dental: 8, grooming: 12 } };
+      expect(effectiveCommissionRate(employee)).toBe(10);
+      expect(commissionForEmployee(employee, 1000)).toBe(100);
+    });
+
+    it("ignores invalid or non-positive rates", () => {
+      const employee = { commissionRates: { a: 0, b: -5, c: "x" } };
+      expect(effectiveCommissionRate(employee)).toBe(0);
+      expect(commissionForEmployee(employee, 500)).toBe(0);
     });
   });
 
@@ -100,7 +122,9 @@ describe("payroll service", () => {
       expect(breakdown).toHaveLength(1);
       expect(breakdown[0].hours).toBe(8);
       expect(breakdown[0].basePay).toBe(400);
-      expect(breakdown[0].commission).toBe(30);
+      // commission derives from the employee's commissionRates (none here) — the
+      // live counter is no longer trusted for payroll numbers
+      expect(breakdown[0].commission).toBe(0);
     });
   });
 });

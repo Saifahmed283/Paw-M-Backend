@@ -15,6 +15,30 @@ export function calculateBasePay(employee, hours, daysInPeriod) {
 const now = () => new Date();
 
 /**
+ * Effective commission rate (percent) for an employee.
+ *
+ * `Employee.commissionRates` is a per-service-category map like
+ * `{"spay-neuter": 10, "dental": 8}` (percent of revenue). Orders are not
+ * categorized in the payroll pipeline, so we apply the mean of all configured
+ * rates to attributed revenue. An empty map means no commission.
+ */
+export function effectiveCommissionRate(employee) {
+  const rates = employee?.commissionRates;
+  if (!rates || typeof rates !== "object") return 0;
+  const values = Object.values(rates).filter(
+    (v) => typeof v === "number" && Number.isFinite(v) && v > 0,
+  );
+  if (values.length === 0) return 0;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+export function commissionForEmployee(employee, revenue) {
+  const rate = effectiveCommissionRate(employee);
+  if (rate <= 0) return 0;
+  return (revenue * rate) / 100;
+}
+
+/**
  * Attribute each order to the work session that was active when the order was
  * created (startedAt <= createdAt <= endedAt ?? now). Sessions that started
  * later win, so an order is attributed to exactly one session and therefore
@@ -88,7 +112,7 @@ export function calculateBreakdown(sessions, employee) {
       orders: session.ordersCount,
       revenue: session.revenueTotal,
       basePay: hours * employee.hourlyRate,
-      commission: session.commissionTotal,
+      commission: commissionForEmployee(employee, session.revenueTotal),
     };
   });
 }
@@ -151,7 +175,7 @@ export async function calculatePayrollForPeriod(periodStart, periodEnd) {
 
     const totals = calculateSessionTotals(empSessions);
     const basePay = calculateBasePay(employee, totals.hours, daysInPeriod);
-    const commissionPay = totals.commission;
+    const commissionPay = commissionForEmployee(employee, totals.revenue);
     const netPay = basePay + commissionPay;
 
     records.push({
