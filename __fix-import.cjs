@@ -1,0 +1,10 @@
+const fs = require("fs");
+const p = "C:\\My-Projects\\Paw-M\\Paw-M-Backend\\src\\routes\\products.js";
+let s = fs.readFileSync(p, "utf8");
+const before = s;
+s = s.replace(/(createProductSchema,)\r?\n\s*\r?\n(\s*updateProductSchema,)/, "$1\r\n$2");
+if (s === before) throw new Error("FAIL: blank line not found in import block");
+fs.writeFileSync(p, s);
+console.log("import block cleaned");
+console.log("--- head ---");
+console.log(s.split(/\r?\n/).slice(0, 19).map((l, i) => `${i + 1}: ${l}`).join("\n"));

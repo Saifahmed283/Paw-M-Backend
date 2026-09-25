@@ -16,31 +16,6 @@ export const createProductSchema = z.object({
   }),
 });
 
-export const importProductsSchema = z.object({
-  body: z.object({
-    products: z
-      .array(
-        z.object({
-          name: z.string().min(1).max(200),
-          description: z.string().max(5000),
-          price: z.number().nonnegative(),
-          category: z.string().min(1).max(60),
-          petType: z.enum(["dog", "cat", "both"]),
-          stock: z.number().int().nonnegative(),
-          barcode: z.string().trim().max(128).nullable().optional(),
-        }),
-      )
-      .min(1)
-      .max(500),
-    duplicateAction: z.enum(["replace", "skip"]),
-    resolutions: z
-      .array(z.enum(["replace", "skip"]))
-      .max(500)
-      .optional()
-      .describe("Per-row duplicate decisions, aligned to `products` by index"),
-  }),
-});
-
 export const updateProductSchema = z.object({
   params: z.object({ id: z.string() }),
   body: z.object({
