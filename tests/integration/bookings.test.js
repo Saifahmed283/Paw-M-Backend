@@ -213,21 +213,24 @@ describe("Product import API", () => {
     );
   });
 
-  async function requestImport(duplicateAction) {
+  async function requestImport(duplicateAction, resolutions) {
     const testApp = express();
     testApp.use(express.json());
     testApp.use("/api/products", productRouter);
-    return request(testApp).post("/api/products/import").send({
-      products: [duplicateProduct, newProduct],
-      duplicateAction,
-    });
+    return request(testApp)
+      .post("/api/products/import")
+      .send({ products: [duplicateProduct, newProduct], duplicateAction, resolutions });
   }
 
   it("adds new products and skips duplicates without deleting the catalog", async () => {
     const response = await requestImport("skip");
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ summary: { created: 1, updated: 0, skipped: 1 } });
+    expect(response.body.summary).toEqual({ created: 1, updated: 0, skipped: 1 });
+    expect(response.body.results).toEqual([
+      { index: 0, action: "skipped" },
+      { index: 1, action: "created" },
+    ]);
     expect(mockPrisma.product.create).toHaveBeenCalledTimes(1);
     expect(mockPrisma.product.create).toHaveBeenCalledWith({ data: expect.any(Object) });
     expect(mockPrisma.product.update).not.toHaveBeenCalled();
@@ -238,7 +241,11 @@ describe("Product import API", () => {
     const response = await requestImport("replace");
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ summary: { created: 1, updated: 1, skipped: 0 } });
+    expect(response.body.summary).toEqual({ created: 1, updated: 1, skipped: 0 });
+    expect(response.body.results).toEqual([
+      { index: 0, action: "updated" },
+      { index: 1, action: "created" },
+    ]);
     expect(mockPrisma.product.update).toHaveBeenCalledWith({
       where: { id: existingProduct.id },
       data: {
@@ -253,5 +260,36 @@ describe("Product import API", () => {
     });
     expect(mockPrisma.product.create).toHaveBeenCalledTimes(1);
     expect(mockPrisma.product.delete).not.toHaveBeenCalled();
+  });
+
+  it("applies per-row resolutions instead of the blanket duplicate action", async () => {
+    const response = await requestImport("skip", ["replace", "skip"]);
+
+    expect(response.status).toBe(200);
+    expect(response.body.summary).toEqual({ created: 1, updated: 1, skipped: 0 });
+    expect(response.body.results).toEqual([
+      { index: 0, action: "updated" },
+      { index: 1, action: "created" },
+    ]);
+    expect(mockPrisma.product.update).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.product.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a duplicate row even when the blanket action is replace", async () => {
+    const response = await requestImport("replace", ["skip", "skip"]);
+
+    expect(response.status).toBe(200);
+    expect(response.body.summary).toEqual({ created: 1, updated: 0, skipped: 1 });
+    expect(mockPrisma.product.update).not.toHaveBeenCalled();
+    expect(mockPrisma.product.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the blanket action for rows without a resolution", async () => {
+    const response = await requestImport("replace", ["skip"]);
+
+    expect(response.status).toBe(200);
+    expect(response.body.summary).toEqual({ created: 1, updated: 0, skipped: 1 });
+    expect(mockPrisma.product.update).not.toHaveBeenCalled();
+    expect(mockPrisma.product.create).toHaveBeenCalledTimes(1);
   });
 });

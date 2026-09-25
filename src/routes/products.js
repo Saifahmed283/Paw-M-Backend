@@ -73,7 +73,7 @@ router.post(
   requireAdmin,
   validate(importProductsSchema),
   async (req, res) => {
-    const { products, duplicateAction } = req.validated.body;
+    const { products, duplicateAction, resolutions } = req.validated.body;
     try {
       const result = await prisma.$transaction(
         async (tx) => {
@@ -82,12 +82,15 @@ router.post(
             existingProducts.map((product) => [productImportKey(product), product]),
           );
           const summary = { created: 0, updated: 0, skipped: 0 };
+          const results = [];
 
-          for (const product of products) {
+          for (const [index, product] of products.entries()) {
             const key = productImportKey(product);
             const existing = productsByKey.get(key);
-            if (existing && duplicateAction === "skip") {
+            const resolution = resolutions?.[index] ?? duplicateAction;
+            if (existing && resolution === "skip") {
               summary.skipped += 1;
+              results.push({ index, action: "skipped" });
               continue;
             }
 
@@ -99,19 +102,25 @@ router.post(
               : await tx.product.create({ data: importedProductCreateData(product) });
             productsByKey.delete(key);
             productsByKey.set(productImportKey(saved), saved);
-            if (existing) summary.updated += 1;
-            else summary.created += 1;
+            if (existing) {
+              summary.updated += 1;
+              results.push({ index, action: "updated" });
+            } else {
+              summary.created += 1;
+              results.push({ index, action: "created" });
+            }
           }
 
+          const detail = `Imported products: ${summary.created} added, ${summary.updated} replaced, ${summary.skipped} skipped`;
           await tx.auditLog.create({
             data: {
               action: "product_import",
-              target: duplicateAction,
-              detail: `Imported products: ${summary.created} added, ${summary.updated} replaced, ${summary.skipped} skipped`,
+              target: resolutions ? "per-row" : duplicateAction,
+              detail,
             },
           });
 
-          return { summary };
+          return { summary, results, detail };
         },
         { maxWait: 5000, timeout: 30000 },
       );

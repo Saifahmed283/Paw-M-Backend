@@ -33,6 +33,11 @@ export const importProductsSchema = z.object({
       .min(1)
       .max(500),
     duplicateAction: z.enum(["replace", "skip"]),
+    resolutions: z
+      .array(z.enum(["replace", "skip"]))
+      .max(500)
+      .optional()
+      .describe("Per-row duplicate decisions, aligned to `products` by index"),
   }),
 });
 
