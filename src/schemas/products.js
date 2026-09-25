@@ -16,10 +16,30 @@ export const createProductSchema = z.object({
   }),
 });
 
+export const importProductsSchema = z.object({
+  body: z.object({
+    products: z
+      .array(
+        z.object({
+          name: z.string().min(1).max(200),
+          description: z.string().max(5000),
+          price: z.number().nonnegative(),
+          category: z.string().min(1).max(60),
+          petType: z.enum(["dog", "cat", "both"]),
+          stock: z.number().int().nonnegative(),
+          barcode: z.string().trim().max(128).nullable().optional(),
+        }),
+      )
+      .min(1)
+      .max(500),
+    duplicateAction: z.enum(["replace", "skip"]),
+  }),
+});
+
 export const updateProductSchema = z.object({
   params: z.object({ id: z.string() }),
   body: z.object({
-    name: z.string().max(200).optional(),
+    name: z.string().min(1).max(200).optional(),
     description: z.string().max(5000).optional(),
     price: z.number().nonnegative().optional(),
     compareAtPrice: z.number().nonnegative().nullable().optional(),

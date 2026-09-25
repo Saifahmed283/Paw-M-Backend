@@ -5,11 +5,126 @@ import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireAdmin, requirePayrollOrAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { createProductSchema, updateProductSchema, updateStockSchema } from "../schemas/products.js";
+import {
+  createProductSchema,
+  importProductsSchema,
+  updateProductSchema,
+  updateStockSchema,
+} from "../schemas/products.js";
 import { adjustStock } from "../services/stock.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/products" });
+
+function normalizeProductText(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function productImportKey(product) {
+  const barcode = normalizeProductText(product.barcode);
+  if (barcode) return `barcode:${barcode}`;
+  return [
+    "details",
+    normalizeProductText(product.name),
+    normalizeProductText(product.category),
+    normalizeProductText(product.petType ?? "both"),
+  ].join("|");
+}
+
+function importedProductCreateData(body) {
+  return {
+    name: body.name.trim(),
+    description: body.description.trim(),
+    price: body.price,
+    compareAtPrice: body.compareAtPrice ?? null,
+    image: body.image ?? "",
+    category: body.category.trim(),
+    petType: sanitizePetType(body.petType),
+    stock: body.stock,
+    featured: body.featured ?? false,
+    barcode: body.barcode?.trim() || null,
+    barcodeImage: body.barcodeImage || null,
+  };
+}
+
+function importedProductUpdateData(body) {
+  const data = {};
+  if (body.name !== undefined) data.name = body.name.trim();
+  if (body.description !== undefined) data.description = body.description.trim();
+  if (body.price !== undefined) data.price = body.price;
+  if (body.compareAtPrice !== undefined) data.compareAtPrice = body.compareAtPrice;
+  if (body.image !== undefined) data.image = body.image;
+  if (body.category !== undefined) data.category = body.category.trim();
+  if (body.petType !== undefined) data.petType = sanitizePetType(body.petType);
+  if (body.stock !== undefined) data.stock = body.stock;
+  if (body.featured !== undefined) data.featured = body.featured;
+  if (body.barcode !== undefined) data.barcode = body.barcode?.trim() || null;
+  if (body.barcodeImage !== undefined) data.barcodeImage = body.barcodeImage || null;
+  return data;
+}
+
+router.post(
+  "/import",
+  authenticateUser,
+  requireAdmin,
+  validate(importProductsSchema),
+  async (req, res) => {
+    const { products, duplicateAction } = req.validated.body;
+    try {
+      const result = await prisma.$transaction(
+        async (tx) => {
+          const existingProducts = await tx.product.findMany();
+          const productsByKey = new Map(
+            existingProducts.map((product) => [productImportKey(product), product]),
+          );
+          const summary = { created: 0, updated: 0, skipped: 0 };
+
+          for (const product of products) {
+            const key = productImportKey(product);
+            const existing = productsByKey.get(key);
+            if (existing && duplicateAction === "skip") {
+              summary.skipped += 1;
+              continue;
+            }
+
+            const saved = existing
+              ? await tx.product.update({
+                  where: { id: existing.id },
+                  data: importedProductUpdateData(product),
+                })
+              : await tx.product.create({ data: importedProductCreateData(product) });
+            productsByKey.delete(key);
+            productsByKey.set(productImportKey(saved), saved);
+            if (existing) summary.updated += 1;
+            else summary.created += 1;
+          }
+
+          await tx.auditLog.create({
+            data: {
+              action: "product_import",
+              target: duplicateAction,
+              detail: `Imported products: ${summary.created} added, ${summary.updated} replaced, ${summary.skipped} skipped`,
+            },
+          });
+
+          return { summary };
+        },
+        { maxWait: 5000, timeout: 30000 },
+      );
+      res.json(result);
+    } catch (e) {
+      log.error({ err: e }, "failed to import products");
+      if (e?.code === "P2002") {
+        return res.status(409).json({ error: "A product with this barcode already exists" });
+      }
+      res.status(500).json({ error: "Failed to import products" });
+    }
+  },
+);
 
 router.get("/low-stock", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
   try {

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import express from "express";
+import request from "supertest";
 import { mockPrisma } from "../setup.js";
 
 vi.mock("../../src/lib/prisma.js", () => ({
@@ -9,6 +11,17 @@ vi.mock("../../src/lib/logger.js", () => ({
   logger: { child: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }) },
   childLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
 }));
+
+vi.mock("../../src/middleware/auth.js", () => ({
+  authenticateUser: (req, _res, next) => {
+    req.user = { id: 1, username: "admin", role: "admin" };
+    next();
+  },
+  requireAdmin: (_req, _res, next) => next(),
+  requirePayrollOrAdmin: (_req, _res, next) => next(),
+}));
+
+import productRouter from "../../src/routes/products.js";
 
 describe("Booking validation", () => {
   beforeEach(() => {
@@ -152,5 +165,93 @@ describe("Payment validation", () => {
       },
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("Product import API", () => {
+  const existingProduct = {
+    id: "product-1",
+    name: "Cat Food",
+    description: "Adult",
+    price: 15,
+    compareAtPrice: null,
+    image: "existing.jpg",
+    category: "food",
+    petType: "cat",
+    stock: 4,
+    featured: true,
+    barcode: "CAT-001",
+    barcodeImage: "existing-barcode.jpg",
+  };
+  const duplicateProduct = {
+    name: "Updated Cat Food",
+    description: "New formula",
+    price: 18,
+    category: "food",
+    petType: "cat",
+    stock: 8,
+    barcode: "CAT-001",
+  };
+  const newProduct = {
+    name: "Rope Toy",
+    description: "500 g",
+    price: 9,
+    category: "toys",
+    petType: "both",
+    stock: 3,
+    barcode: null,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPrisma.product.findMany.mockResolvedValue([existingProduct]);
+    mockPrisma.product.create.mockImplementation(({ data }) =>
+      Promise.resolve({ ...data, id: "product-2", createdAt: new Date(), updatedAt: new Date() }),
+    );
+    mockPrisma.product.update.mockImplementation(({ where, data }) =>
+      Promise.resolve({ ...existingProduct, ...where, ...data }),
+    );
+  });
+
+  async function requestImport(duplicateAction) {
+    const testApp = express();
+    testApp.use(express.json());
+    testApp.use("/api/products", productRouter);
+    return request(testApp).post("/api/products/import").send({
+      products: [duplicateProduct, newProduct],
+      duplicateAction,
+    });
+  }
+
+  it("adds new products and skips duplicates without deleting the catalog", async () => {
+    const response = await requestImport("skip");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ summary: { created: 1, updated: 0, skipped: 1 } });
+    expect(mockPrisma.product.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.product.create).toHaveBeenCalledWith({ data: expect.any(Object) });
+    expect(mockPrisma.product.update).not.toHaveBeenCalled();
+    expect(mockPrisma.product.delete).not.toHaveBeenCalled();
+  });
+
+  it("updates only the matched duplicate and preserves unrelated product fields", async () => {
+    const response = await requestImport("replace");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ summary: { created: 1, updated: 1, skipped: 0 } });
+    expect(mockPrisma.product.update).toHaveBeenCalledWith({
+      where: { id: existingProduct.id },
+      data: {
+        name: duplicateProduct.name,
+        description: duplicateProduct.description,
+        price: duplicateProduct.price,
+        category: duplicateProduct.category,
+        petType: duplicateProduct.petType,
+        stock: duplicateProduct.stock,
+        barcode: duplicateProduct.barcode,
+      },
+    });
+    expect(mockPrisma.product.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.product.delete).not.toHaveBeenCalled();
   });
 });
