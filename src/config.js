@@ -70,7 +70,11 @@ export const config = {
   rateLimit: {
     windowMs: 15 * 60 * 1000,
     authMax: Number(process.env.RATE_LIMIT_AUTH_MAX) || 20,
-    apiMax: Number(process.env.RATE_LIMIT_API_MAX) || 100,
+    // One shared budget covers the whole /api surface, so it has to accommodate a
+    // full dashboard load plus periodic polling. The previous default of 100 was
+    // exhausted by a single browsing session, after which every endpoint returned
+    // 429 for the rest of the window and the pollers could never recover.
+    apiMax: Number(process.env.RATE_LIMIT_API_MAX) || 1000,
     sensitiveMax: Number(process.env.RATE_LIMIT_SENSITIVE_MAX) || 30,
   },
 

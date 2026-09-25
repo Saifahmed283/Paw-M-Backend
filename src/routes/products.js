@@ -15,6 +15,37 @@ import { adjustStock } from "../services/stock.js";
 const router = Router();
 const log = logger.child({ module: "routes/products" });
 
+// Product images are stored inline as base64 data URIs in a TEXT column. The 26
+// seeded images total ~50 MB, so serialising them into every list response
+// produced a ~52 MB JSON body that exhausted the response buffer (HTTP 500) and
+// could OOM a small container. Lists therefore expose a stable URL and the bytes
+// are streamed one product at a time by GET /:id/image.
+const DATA_URI_RE = /^data:([\w.+-]+\/[\w.+-]+)?((?:;[\w-]+=[\w-]+)*);base64,([\s\S]*)$/;
+
+function isDataUri(value) {
+  return typeof value === "string" && DATA_URI_RE.test(value);
+}
+
+// Derive the public API origin from the request itself. The frontend computes its
+// own API base from window.location rather than a fixed env var, so mirroring
+// that here keeps generated image URLs correct on localhost, LAN and behind the
+// DigitalOcean load balancer (app.set("trust proxy", 1) makes req.protocol right).
+function requestOrigin(req) {
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+function productImageUrl(req, id) {
+  return `${requestOrigin(req)}/api/products/${encodeURIComponent(id)}/image`;
+}
+
+function serializeProduct(req, product) {
+  if (!product) return product;
+  return {
+    ...product,
+    image: isDataUri(product.image) ? productImageUrl(req, product.id) : product.image,
+  };
+}
+
 router.get("/low-stock", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
   try {
     const p = parsePagination(req.query);
@@ -38,7 +69,7 @@ router.get("/", async (req, res) => {
       prisma.product.findMany({ orderBy: { createdAt: "desc" }, skip: p.skip, take: p.limit }),
       prisma.product.count(),
     ]);
-    res.json(paginatedResponse(products, total, p));
+    res.json(paginatedResponse(products.map((product) => serializeProduct(req, product)), total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch products");
     res.status(500).json({ error: "Failed to fetch products" });
@@ -62,11 +93,44 @@ router.get("/:id/stock-history", authenticateUser, requirePayrollOrAdmin, async 
   }
 });
 
+router.get("/:id/image", async (req, res) => {
+  try {
+    const product = await prisma.product.findUnique({
+      where: { id: req.params.id },
+      select: { image: true },
+    });
+    const stored = product?.image;
+    if (!stored) return res.status(404).json({ error: "Image not found" });
+
+    // A stored http(s) value is a plain remote URL; hand the browser off to it
+    // rather than proxying the bytes through the API.
+    if (/^https?:\/\//i.test(stored)) return res.redirect(302, stored);
+
+    const match = DATA_URI_RE.exec(stored);
+    if (!match) return res.status(404).json({ error: "Image not found" });
+
+    const [, mime, , base64] = match;
+    const buffer = Buffer.from(base64, "base64");
+    if (buffer.length === 0) return res.status(404).json({ error: "Image not found" });
+
+    res.setHeader("Content-Type", mime || "application/octet-stream");
+    res.setHeader("Content-Length", buffer.length);
+    // Product images are effectively immutable, so let the browser cache them
+    // instead of re-downloading multi-megabyte payloads on every dashboard visit.
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    return res.end(buffer);
+  } catch (e) {
+    log.error({ err: e }, "failed to serve product image");
+    res.status(500).json({ error: "Failed to fetch image" });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const product = await prisma.product.findUnique({ where: { id: req.params.id } });
     if (!product) return res.status(404).json({ error: "Product not found" });
-    res.json(product);
+    res.json(serializeProduct(req, product));
   } catch {
     res.status(404).json({ error: "Product not found" });
   }
@@ -91,7 +155,7 @@ router.post("/", authenticateUser, requireAdmin, validate(createProductSchema), 
       },
     });
     logAudit("product_create", created.id, `Created product ${created.name}`);
-    res.status(201).json(created);
+    res.status(201).json(serializeProduct(req, created));
   } catch (e) {
     log.error({ err: e }, "failed to create product");
     res.status(500).json({ error: "Failed to create product" });
@@ -116,7 +180,7 @@ router.patch("/:id", authenticateUser, requireAdmin, validate(updateProductSchem
   try {
     const updated = await prisma.product.update({ where: { id }, data });
     logAudit("product_update", id, `Updated product ${updated.name}`);
-    res.json(updated);
+    res.json(serializeProduct(req, updated));
   } catch {
     res.status(404).json({ error: "Product not found" });
   }
