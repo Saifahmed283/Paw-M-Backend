@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { logAudit, sanitizePetType } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
@@ -16,11 +17,31 @@ const router = Router();
 const log = logger.child({ module: "routes/products" });
 
 // Product images are stored inline as base64 data URIs in a TEXT column. The 26
-// seeded images total ~50 MB, so serialising them into every list response
-// produced a ~52 MB JSON body that exhausted the response buffer (HTTP 500) and
-// could OOM a small container. Lists therefore expose a stable URL and the bytes
-// are streamed one product at a time by GET /:id/image.
+// seeded images total ~50 MB, so selecting the column pulled the whole payload
+// across the connection: a full-row list query took ~18 s and was cancelled by the
+// 15 s statement timeout (Postgres 57014), which surfaced as HTTP 500 and, on a
+// memory-constrained container, as an OOM restart loop. Image bytes are therefore
+// never part of a list or detail query; they are streamed one product at a time by
+// GET /:id/image.
 const DATA_URI_RE = /^data:([\w.+-]+\/[\w.+-]+)?((?:;[\w-]+=[\w-]+)*);base64,([\s\S]*)$/;
+
+// Every Product column except `image`.
+const PRODUCT_COLUMNS = {
+  id: true,
+  name: true,
+  description: true,
+  price: true,
+  compareAtPrice: true,
+  category: true,
+  petType: true,
+  stock: true,
+  minStockAlert: true,
+  featured: true,
+  barcode: true,
+  barcodeImage: true,
+  createdAt: true,
+  updatedAt: true,
+};
 
 function isDataUri(value) {
   return typeof value === "string" && DATA_URI_RE.test(value);
@@ -38,6 +59,54 @@ function productImageUrl(req, id) {
   return `${requestOrigin(req)}/api/products/${encodeURIComponent(id)}/image`;
 }
 
+// Classify each product's stored image from its TOAST prefix, which Postgres can
+// evaluate without transferring the payload. Inline data URIs become a stable
+// endpoint URL; remote http(s) URLs stay as-is because they are already cheap to
+// inline; anything else is reported as having no image.
+async function loadImageRefs(id) {
+  const classify = (rows) =>
+    rows.map((row) => [row.id, row.kind === "data" ? "data" : row.kind === "remote" ? "remote" : ""]);
+
+  const [kinds, remotes] = await Promise.all([
+    id
+      ? prisma.$queryRaw(Prisma.sql`
+          SELECT "id",
+                 CASE
+                   WHEN left("image", 5) = 'data:' THEN 'data'
+                   WHEN left("image", 4) = 'http' THEN 'remote'
+                   ELSE ''
+                 END AS "kind"
+          FROM "Product" WHERE "id" = ${id}`)
+      : prisma.$queryRaw`
+          SELECT "id",
+                 CASE
+                   WHEN left("image", 5) = 'data:' THEN 'data'
+                   WHEN left("image", 4) = 'http' THEN 'remote'
+                   ELSE ''
+                 END AS "kind"
+          FROM "Product"`,
+    id
+      ? prisma.$queryRaw(Prisma.sql`
+          SELECT "id", "image" FROM "Product" WHERE left("image", 4) = 'http' AND "id" = ${id}`)
+      : prisma.$queryRaw`SELECT "id", "image" FROM "Product" WHERE left("image", 4) = 'http'`,
+  ]);
+
+  const remoteById = new Map(remotes.map((row) => [row.id, row.image]));
+  return {
+    dataIds: new Set(classify(kinds).filter(([, kind]) => kind === "data").map(([pid]) => pid)),
+    remoteById,
+  };
+}
+
+function withImage(req, product, refs) {
+  let image = "";
+  if (refs.dataIds.has(product.id)) image = productImageUrl(req, product.id);
+  else if (refs.remoteById.has(product.id)) image = refs.remoteById.get(product.id);
+  return { ...product, image };
+}
+
+// Used for create/update responses, where the single record already carries its
+// own image column.
 function serializeProduct(req, product) {
   if (!product) return product;
   return {
@@ -65,11 +134,18 @@ router.get("/low-stock", authenticateUser, requirePayrollOrAdmin, async (req, re
 router.get("/", async (req, res) => {
   try {
     const p = parsePagination(req.query);
-    const [products, total] = await Promise.all([
-      prisma.product.findMany({ orderBy: { createdAt: "desc" }, skip: p.skip, take: p.limit }),
+    const [products, total, imageRefs] = await Promise.all([
+      prisma.product.findMany({
+        select: PRODUCT_COLUMNS,
+        orderBy: { createdAt: "desc" },
+        skip: p.skip,
+        take: p.limit,
+      }),
       prisma.product.count(),
+      loadImageRefs(),
     ]);
-    res.json(paginatedResponse(products.map((product) => serializeProduct(req, product)), total, p));
+    const data = products.map((product) => withImage(req, product, imageRefs));
+    res.json(paginatedResponse(data, total, p));
   } catch (e) {
     log.error({ err: e }, "failed to fetch products");
     res.status(500).json({ error: "Failed to fetch products" });
@@ -128,9 +204,12 @@ router.get("/:id/image", async (req, res) => {
 
 router.get("/:id", async (req, res) => {
   try {
-    const product = await prisma.product.findUnique({ where: { id: req.params.id } });
+    const [product, imageRefs] = await Promise.all([
+      prisma.product.findUnique({ where: { id: req.params.id }, select: PRODUCT_COLUMNS }),
+      loadImageRefs(req.params.id),
+    ]);
     if (!product) return res.status(404).json({ error: "Product not found" });
-    res.json(serializeProduct(req, product));
+    res.json(withImage(req, product, imageRefs));
   } catch {
     res.status(404).json({ error: "Product not found" });
   }
