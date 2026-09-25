@@ -12,7 +12,11 @@ process.on("unhandledRejection", (reason) => {
 
 process.on("uncaughtException", (err) => {
   log.fatal({ err }, "uncaught exception — server will exit");
-  process.exit(1);
+  // stdout is a pipe inside a container, so the write is async. Exiting inline
+  // can truncate the single most useful line when diagnosing a crash loop, so
+  // flush first and keep a hard-exit backstop in case the flush never settles.
+  logger.flush(() => process.exit(1));
+  setTimeout(() => process.exit(1), 2000).unref();
 });
 
 archiveFinishedDayRecords()
