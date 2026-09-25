@@ -114,6 +114,10 @@ const mockPrisma = {
     }
     return Promise.all(fns);
   }),
+  $queryRaw: vi.fn().mockResolvedValue([{ ok: 1 }]),
+  $queryRawUnsafe: vi.fn().mockResolvedValue([{ ok: 1 }]),
+  $connect: vi.fn().mockResolvedValue(undefined),
+  $disconnect: vi.fn().mockResolvedValue(undefined),
 };
 
 vi.mock("../src/lib/prisma.js", () => ({

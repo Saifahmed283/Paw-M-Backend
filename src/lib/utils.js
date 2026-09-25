@@ -116,3 +116,14 @@ export function fawryReference() {
   for (let i = 0; i < 6; i++) out += alphabet[cryptoRandomInt(alphabet.length) - 1];
   return `PAW-${out}`;
 }
+
+export function withTimeout(promise, ms, label = "operation") {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return promise;
+
+  let timer;
+  const expiry = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+
+  return Promise.race([promise, expiry]).finally(() => clearTimeout(timer));
+}

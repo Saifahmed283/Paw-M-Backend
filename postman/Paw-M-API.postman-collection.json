@@ -278,7 +278,7 @@
       "item": [
         {
           "name": "GET /api/health",
-          "description": "Liveness + DB connectivity probe. Expects 200 { status: 'ok', db: 'connected' }.",
+          "description": "Liveness probe. Confirms only that the process is running; it does not touch the database. Expects 200 { status: 'ok', db: 'unchecked', uptimeSeconds }.",
           "event": [
             {
               "listen": "test",
@@ -287,7 +287,8 @@
                 "exec": [
                   "const j = pm.response.json();",
                   "pm.test('status ok', () => pm.expect(j.status).to.eql('ok'));",
-                  "pm.test('db connected', () => pm.expect(j.db).to.eql('connected'));"
+                  "pm.test('db not asserted by liveness', () => pm.expect(j.db).to.eql('unchecked'));",
+                  "pm.test('uptime reported', () => pm.expect(j.uptimeSeconds).to.be.a('number'));"
                 ]
               }
             }
@@ -303,6 +304,42 @@
               "path": [
                 "api",
                 "health"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/ready",
+          "description": "Readiness probe. Runs a real SELECT 1 under a hard timeout, so it reports whether the database is actually usable. Expects 200 { status: 'ready', db: 'connected', latencyMs }, or 503 { status: 'degraded', db: 'disconnected' }.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.test('resolves 200 or 503', () => pm.expect(pm.response.code).to.be.oneOf([200, 503]));",
+                  "if (pm.response.code === 200) {",
+                  "  pm.test('db connected', () => pm.expect(j.db).to.eql('connected'));",
+                  "  pm.test('latency reported', () => pm.expect(j.latencyMs).to.be.a('number'));",
+                  "} else {",
+                  "  pm.test('db reported disconnected', () => pm.expect(j.db).to.eql('disconnected'));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ready"
               ]
             }
           }

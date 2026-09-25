@@ -38,6 +38,15 @@ export const config = {
 
   databaseUrl: process.env.DATABASE_URL,
 
+  database: {
+    connectionLimit: Number(process.env.DB_CONNECTION_LIMIT) || 10,
+    connectTimeoutSec: Number(process.env.DB_CONNECT_TIMEOUT_SEC) || 10,
+    poolTimeoutSec: Number(process.env.DB_POOL_TIMEOUT_SEC) || 10,
+    statementTimeoutMs: Number(process.env.DB_STATEMENT_TIMEOUT_MS) || 15000,
+    socketTimeoutSec: Number(process.env.DB_SOCKET_TIMEOUT_SEC) || 30,
+    healthTimeoutMs: Number(process.env.DB_HEALTH_TIMEOUT_MS) || 5000,
+  },
+
   jwtSecret: process.env.JWT_SECRET || "dev-secret-change-me-in-production",
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "8h",
   cookieName: process.env.COOKIE_NAME || "paw-m-session",
