@@ -20,7 +20,7 @@ services:
   - key: JWT_SECRET
     value: ${jwt_secret}
   - key: FRONTEND_URL
-    value: https://YOUR_FRONTEND_APP.ondigitalocean.app
+    value: https://pawmclinnic.com
   - key: PORT
     value: "8080"
 databases:
