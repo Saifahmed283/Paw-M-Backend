@@ -361,7 +361,7 @@ export function buildClientVerificationEmail({ to, code, clinicName }) {
     heading: "Verify Your Email",
     message: `Welcome to <strong>${clinic}</strong>! Please use the code below to confirm your email address and finish creating your account.`,
     details: [{ label: "Verification Code", value: code, accent: C_BRASS }],
-    notes: "This code expires in <strong>10 minutes</strong>. If you didn't request an account, you can safely ignore this email.",
+    notes: "This code expires in <strong>15 minutes</strong>. If you didn't request an account, you can safely ignore this email.",
   });
 }
 

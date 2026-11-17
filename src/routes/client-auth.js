@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { sendMail, buildClientVerificationEmail } from "../lib/email.js";
+import { config } from "../config.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/client-auth" });
@@ -14,12 +15,9 @@ const CODE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 function generateCode() {
-  const bytes = crypto.randomBytes(CODE_LENGTH);
-  let code = "";
-  for (let i = 0; i < CODE_LENGTH; i++) {
-    code += bytes[i].toString(10).slice(-1);
-  }
-  return code;
+  // crypto.randomInt is uniform over the whole range; taking the last decimal
+  // digit of random bytes was heavily biased toward 0-5.
+  return String(crypto.randomInt(0, 10 ** CODE_LENGTH)).padStart(CODE_LENGTH, "0");
 }
 
 function generateToken() {
@@ -81,15 +79,30 @@ router.post("/register", async (req, res) => {
       },
     });
 
+    let mailResult;
     try {
-      const clinicName = "Paw-M Clinic";
-      await sendMail(buildClientVerificationEmail({ to: email, code, clinicName }));
+      const clinicSettings = await prisma.clinicSettings
+        .findUnique({ where: { id: 1 } })
+        .catch(() => null);
+      const clinicName = clinicSettings?.name || "Paw-M Clinic";
+      mailResult = await sendMail(buildClientVerificationEmail({ to: email, code, clinicName }));
     } catch (mailErr) {
       log.error({ err: mailErr }, "failed to send verification email");
     }
 
+    // If SMTP is unconfigured the code would otherwise vanish silently and the
+    // user could never verify. In development, surface it in the log/response
+    // so the flow stays testable; never expose a real code in production.
+    if (mailResult?.skipped && !config.isProduction) {
+      log.warn({ email, code }, "SMTP not configured — returning code for local development");
+    } else if (mailResult?.skipped) {
+      log.error({ email }, "Verification email skipped: SMTP_PASS is not configured on the server");
+    }
+
     log.info({ email }, "verification code sent");
-    res.status(202).json({ message: "Verification code sent to your email." });
+    const response = { message: "Verification code sent to your email." };
+    if (mailResult?.skipped && !config.isProduction) response.devCode = code;
+    res.status(202).json(response);
   } catch (error) {
     log.error({ err: error }, "register failed");
     res.status(500).json({ error: "Registration failed." });
