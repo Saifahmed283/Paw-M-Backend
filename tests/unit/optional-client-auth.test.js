@@ -35,7 +35,7 @@ describe("optionalClientAuth (guest booking)", () => {
     const req = { headers: {} };
     const { kind } = await runMiddleware(req);
     expect(kind).toBe("next");
-    expect(req.client).toBeUndefined();
+    expect(req.client).toBeNull();
   });
 
   it("links a valid client session to req.client", async () => {
@@ -57,7 +57,7 @@ describe("optionalClientAuth (guest booking)", () => {
     const req = { headers: { authorization: "Bearer expired" } };
     const { kind } = await runMiddleware(req);
     expect(kind).toBe("next");
-    expect(req.client).toBeUndefined();
+    expect(req.client).toBeNull();
   });
 
   it("treats a suspended client as a guest", async () => {
@@ -66,7 +66,7 @@ describe("optionalClientAuth (guest booking)", () => {
     const req = { headers: { authorization: "Bearer token" } };
     const { kind } = await runMiddleware(req);
     expect(kind).toBe("next");
-    expect(req.client).toBeUndefined();
+    expect(req.client).toBeNull();
   });
 
   it("returns 500 on a database error", async () => {

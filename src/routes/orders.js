@@ -4,7 +4,7 @@ import { logAudit, nextId, fawryReference } from "../lib/utils.js";
 import { validateProofImage } from "../services/orders.js";
 import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
-import { authenticateUser, requireStaff, authenticateClient, authenticateClientOrStaff } from "../middleware/auth.js";
+import { authenticateUser, requireStaff, authenticateClient, authenticateClientOrStaff, optionalClientOrStaff } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { createOrderSchema, updateOrderStatusSchema, updateOrderPaymentSchema } from "../schemas/orders.js";
 import { createOrderTransactional, restoreStockOnCancel } from "../services/orders.js";
@@ -43,7 +43,7 @@ router.get("/track", async (req, res) => {
   }
 });
 
-router.post("/", authenticateClientOrStaff, validate(createOrderSchema), async (req, res) => {
+router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req, res) => {
   const body = req.validated.body;
   const paymentMethod = body.paymentMethod;
   try {
@@ -94,6 +94,23 @@ router.post("/", authenticateClientOrStaff, validate(createOrderSchema), async (
       data: { orderId: created.id },
     }).catch(() => {});
 
+    // Confirm the order immediately (not just on later staff status changes).
+    if (created.email) {
+      import("../lib/email.js").then(async ({ sendMail, buildOrderPlacedEmail }) => {
+        const clinicSettings = await prisma.clinicSettings.findUnique({ where: { id: 1 } }).catch(() => null);
+        const clinicName = clinicSettings?.name || "Paw-M Clinic";
+        await sendMail(buildOrderPlacedEmail({
+          to: created.email,
+          customerName: created.customerName,
+          orderId: created.id,
+          total: created.total,
+          paymentMethod: created.paymentMethod,
+          paymentRef: created.paymentMethod === "fawry" ? created.paymentRef : "",
+          clinicName,
+        }));
+      }).catch(() => {});
+    }
+
     attributeSaleToActiveSession(req, { orders: 1, revenue: created.total }).catch(() => {});
 
     res.status(201).json(created);
@@ -106,7 +123,7 @@ router.post("/", authenticateClientOrStaff, validate(createOrderSchema), async (
   }
 });
 
-router.post("/:id/payment-proof", authenticateUser, requireStaff, async (req, res) => {
+router.post("/:id/payment-proof", optionalClientOrStaff, async (req, res) => {
   const { id } = req.params;
   const body = req.body ?? {};
   const paymentRef = String(body.paymentRef ?? "").trim();
@@ -124,6 +141,20 @@ router.post("/:id/payment-proof", authenticateUser, requireStaff, async (req, re
     if (existing.paymentStatus === "paid") {
       return res.status(400).json({ error: "This order is already marked as paid." });
     }
+
+    // Staff may act on any order. A signed-in client must own the order. A
+    // guest proves ownership the same way as the public tracker: order id +
+    // phone. This keeps the customer-facing proof flow working without
+    // exposing other customers' orders.
+    if (!req.user && req.client && existing.clientId !== req.client.id) {
+      return res.status(403).json({ error: "You can only submit proof for your own order." });
+    }
+    if (!req.user && !req.client) {
+      if (!body.phone || String(body.phone).trim() !== existing.phone) {
+        return res.status(403).json({ error: "Phone number does not match this order." });
+      }
+    }
+
     const updated = await prisma.order.update({
       where: { id },
       data: {

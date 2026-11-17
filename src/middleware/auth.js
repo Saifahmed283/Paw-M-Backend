@@ -149,6 +149,10 @@ export function authenticateClient(req, res, next) {
  * there is no privilege to gain by presenting a bad token.
  */
 export function optionalClientAuth(req, res, next) {
+  // Node's IncomingMessage has a built-in `client` property (the TCP socket).
+  // Without this reset, `!req.client` is always false and guests would be
+  // mistaken for authenticated callers.
+  req.client = null;
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
     return next();
@@ -200,4 +204,25 @@ export function authenticateClientOrStaff(req, res, next) {
     return authenticateUser(req, res, next);
   }
   return res.status(401).json({ error: "Unauthorized — sign in to continue" });
+}
+
+/**
+ * Like authenticateClientOrStaff, but unauthenticated callers are allowed
+ * through with no `req.client`/`req.user`. Used on guest-capable order endpoints
+ * where ownership is verified separately (e.g. order id + phone, or the linked
+ * client id). Valid staff/client tokens are resolved as usual.
+ */
+export function optionalClientOrStaff(req, res, next) {
+  // See optionalClientAuth: IncomingMessage#client is the socket, so guests must
+  // be explicitly marked as having no client account.
+  req.client = null;
+  if (req.headers.authorization?.startsWith("Bearer ")) {
+    const bearer = req.headers.authorization.slice(7);
+    if (bearer.includes(".")) return authenticateUser(req, res, next);
+    return optionalClientAuth(req, res, next);
+  }
+  if (req.cookies?.[config.cookieName]) {
+    return authenticateUser(req, res, next);
+  }
+  return next();
 }
