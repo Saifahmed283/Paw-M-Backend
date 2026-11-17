@@ -379,6 +379,26 @@ export function buildPasswordResetEmail({ to, code, clinicName }) {
   });
 }
 
+export function buildContactEmail({ to, name, email, phone, subject, message, clinicName }) {
+  const clinic = escapeHtml(clinicName);
+  return buildMail({
+    to,
+    clinicName,
+    subject: `Contact Form: ${escapeHtml(subject)} — ${clinic}`,
+    preheader: `New message from ${escapeHtml(name)} (${escapeHtml(email)}).`,
+    heading: "New Contact Message",
+    message: `You received a new message via the contact form on <strong>${clinic}</strong> website.`,
+    details: [
+      { label: "Name", value: name, accent: C_AMBER },
+      { label: "Email", value: email, accent: C_AMBER },
+      { label: "Phone", value: phone || "—", accent: C_AMBER },
+      { label: "Subject", value: subject, accent: C_AMBER },
+    ],
+    notes: `<div style="padding:12px 16px;background:#fff8ec;border-radius:10px;border:1px solid #f0e0b8;white-space:pre-wrap;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:${C_TEXT};">${escapeHtml(message).replace(/\n/g, "<br/>")}</div>`,
+    button: { label: "Reply to ${name}", url: `mailto:${email}` },
+  });
+}
+
 export function buildClientNotifyEmail({ to, clientName, title, body, clinicName }) {
   const clinic = escapeHtml(clinicName);
   return buildMail({

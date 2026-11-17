@@ -22,6 +22,7 @@ import taskRoutes from "./tasks.js";
 import notificationRoutes from "./notifications.js";
 import googleRoutes from "./google.js";
 import auditRoutes from "./audit.js";
+import contactRoutes from "./contact.js";
 
 const router = Router();
 
@@ -48,5 +49,6 @@ router.use("/tasks", taskRoutes);
 router.use("/notifications", notificationRoutes);
 router.use("/google", googleRoutes);
 router.use("/audit-logs", auditRoutes);
+router.use("/contact", contactRoutes);
 
 export default router;
