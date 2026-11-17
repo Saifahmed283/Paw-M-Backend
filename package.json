@@ -36,6 +36,9 @@
     "supertest": "^7.2.2",
     "vitest": "^4.1.11"
   },
+  "engines": {
+    "node": "20.x"
+  },
   "allowScripts": {
     "@prisma/client@6.19.3": true,
     "prisma@6.19.3": true,
