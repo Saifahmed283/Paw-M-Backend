@@ -17,8 +17,24 @@ vi.mock("../../src/middleware/auth.js", () => ({
     req.user = { id: 1, username: "admin", role: "admin" };
     next();
   },
+  requireStaff: (_req, _res, next) => next(),
   requireAdmin: (_req, _res, next) => next(),
   requirePayrollOrAdmin: (_req, _res, next) => next(),
+  authenticateClient: (req, _res, next) => {
+    req.client = { id: "test-client", email: "client@example.com", fullName: "Test Client" };
+    next();
+  },
+  optionalClientAuth: (req, _res, next) => {
+    // No Authorization header => guest (mirrors the real middleware).
+    if (!req.headers?.authorization) return next();
+    req.client = { id: "test-client", email: "client@example.com", fullName: "Test Client" };
+    next();
+  },
+  authenticateClientOrStaff: (req, _res, next) => {
+    req.client = { id: "test-client", email: "client@example.com", fullName: "Test Client" };
+    req.user = { id: 1, username: "admin", role: "admin" };
+    next();
+  },
 }));
 
 describe("Booking validation", () => {

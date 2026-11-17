@@ -141,6 +141,45 @@ export function authenticateClient(req, res, next) {
 }
 
 /**
+ * Like authenticateClient, but anonymous callers are allowed through with no
+ * `req.client`. Used on endpoints (e.g. booking creation) that support guests:
+ * a valid, unexpired client session still links the record to the account,
+ * while a missing/invalid/expired/suspended session is treated as a guest.
+ * This is safe because the endpoint already accepts fully anonymous input —
+ * there is no privilege to gain by presenting a bad token.
+ */
+export function optionalClientAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    return next();
+  }
+  const token = authHeader.slice(7);
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+  prisma.clientSession
+    .findFirst({
+      where: { tokenHash, expiresAt: { gt: new Date() } },
+      select: { clientId: true },
+    })
+    .then((session) => {
+      if (!session) return null;
+      return prisma.clientAccount.findUnique({
+        where: { id: session.clientId },
+        select: { id: true, email: true, fullName: true, suspended: true },
+      });
+    })
+    .then((client) => {
+      // Invalid/expired token, missing account or suspended account => guest.
+      if (client && !client.suspended) req.client = client;
+      next();
+    })
+    .catch((err) => {
+      log.error({ err }, "optional client auth middleware error");
+      return res.status(500).json({ error: "Internal server error" });
+    });
+}
+
+/**
  * Counter / POS middleware: accepts either a store client's bearer token or an
  * authenticated staff/admin session cookie. Used where a sale may legitimately
  * be created by a cashier at the counter (no client logged in) as well as by a

@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { logAudit, nextId } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
-import { authenticateUser, requireStaff, authenticateClient } from "../middleware/auth.js";
+import { authenticateUser, requireStaff, optionalClientAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { createBookingSchema, updateBookingStatusSchema, updateBookingClinicalSchema } from "../schemas/bookings.js";
 import { createBroadcastNotification } from "../lib/notify.js";
@@ -26,9 +26,21 @@ router.get("/", authenticateUser, requireStaff, async (req, res) => {
   }
 });
 
-router.post("/", authenticateClient, validate(createBookingSchema), async (req, res) => {
+router.post("/", optionalClientAuth, validate(createBookingSchema), async (req, res) => {
   const b = req.validated.body;
   try {
+    const isGuest = !req.client;
+
+    // Guests have no account, so an email is the only way to reach them with a
+    // confirmation. Saved pets belong to accounts and cannot be referenced by
+    // an anonymous booking — the form already forces guests to enter pet details.
+    if (isGuest && !b.email?.trim()) {
+      return res.status(400).json({ error: "Email is required for guest bookings." });
+    }
+    if (isGuest && b.petId) {
+      return res.status(400).json({ error: "Saved pets are only available to signed-in clients." });
+    }
+
     const conflict = await prisma.booking.findFirst({
       where: {
         doctorId: b.doctorId,
@@ -52,7 +64,7 @@ router.post("/", authenticateClient, validate(createBookingSchema), async (req, 
     const record = await prisma.booking.create({
       data: {
         id: await nextId("REQ", "booking"),
-        clientId: req.client.id,
+        clientId: req.client?.id ?? null,
         petId,
         ownerName: b.ownerName,
         phone: b.phone,
