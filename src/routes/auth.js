@@ -232,13 +232,17 @@ router.get("/me", async (req, res) => {
   }
 });
 
-router.put("/credentials", validate(changeCredentialsSchema), async (req, res) => {
+router.put("/credentials", authenticateUser, validate(changeCredentialsSchema), async (req, res) => {
   const { currentPassword, newUsername, newPassword } = req.validated.body;
   const nextName = newUsername !== undefined ? newUsername.trim().toLowerCase() : undefined;
   const nextPass = newPassword !== undefined ? String(newPassword) : undefined;
   try {
-    const user = await prisma.adminUser.findFirst();
-    if (!user) return res.status(404).json({ error: "No staff account configured." });
+    // Scope the change to the signed-in account instead of the first account in
+    // the table. Without authenticateUser this endpoint let anyone who knew the
+    // seeded password rewrite the primary admin's credentials.
+    if (!req.user?.id) return res.status(401).json({ error: "Unauthorized — no session" });
+    const user = await prisma.adminUser.findUnique({ where: { id: req.user.id } });
+    if (!user) return res.status(404).json({ error: "Account not found." });
     const currentHash = hashPassword(currentPassword, user.salt);
     if (!constantTimeCompare(currentHash, user.hash)) {
       return res.status(401).json({ error: "Current password is incorrect." });
