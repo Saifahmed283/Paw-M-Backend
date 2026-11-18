@@ -1,13 +1,13 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { logAudit, nextId, fawryReference } from "../lib/utils.js";
+import { logAudit, nextId, fawryReference, todayStr } from "../lib/utils.js";
 import { validateProofImage } from "../services/orders.js";
 import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireStaff, authenticateClient, authenticateClientOrStaff, optionalClientOrStaff } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { createOrderSchema, updateOrderStatusSchema, updateOrderPaymentSchema } from "../schemas/orders.js";
-import { createOrderTransactional, restoreStockOnCancel } from "../services/orders.js";
+import { createOrderSchema, updateOrderStatusSchema, updateOrderPaymentSchema, refundOrderSchema } from "../schemas/orders.js";
+import { createOrderTransactional, restoreStockOnCancel, computeRefundPlan } from "../services/orders.js";
 import { createBroadcastNotification } from "../lib/notify.js";
 import { attributeSaleToActiveSession } from "../services/session-attribution.js";
 
@@ -120,6 +120,107 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
     }
     log.error({ err: e }, "failed to create order");
     res.status(500).json({ error: "Failed to create order" });
+  }
+});
+
+// Staff-only refunds. The order itself is the invoice: POS cash sales are
+// stored as unpaid, so paymentStatus is deliberately not checked here.
+router.post("/:id/refund", authenticateUser, requireStaff, validate(refundOrderSchema), async (req, res) => {
+  const { id } = req.validated.params;
+  const { reason, items } = req.validated.body;
+  const username = req.user?.username ?? "";
+  try {
+    const order = await prisma.order.findUnique({ where: { id } });
+    if (!order) return res.status(404).json({ error: "Order not found" });
+
+    const { refundId, plan } = await prisma.$transaction(
+      async (tx) => {
+        // Read prior refunds inside the transaction so two concurrent refunds
+        // cannot both consume the same remaining quantity.
+        const payments = await tx.payment.findMany({
+          where: { orderId: id, kind: "refund" },
+          include: { items: true },
+        });
+        const refundPlan = computeRefundPlan(order, payments, items);
+        const refundPaymentId = await nextId("PAY", "payment");
+
+        await tx.payment.create({
+          data: {
+            id: refundPaymentId,
+            title: `Refund ${order.id}`,
+            amount: -refundPlan.refundedAmount,
+            method: order.paymentMethod,
+            status: "paid",
+            date: todayStr(),
+            notes: reason,
+            orderId: order.id,
+            kind: "refund",
+            requestedBy: username,
+          },
+        });
+
+        for (const line of refundPlan.refundedLines) {
+          await tx.paymentItem.create({
+            data: {
+              paymentId: refundPaymentId,
+              label: `${line.qty}x ${line.name}`,
+              amount: -line.amount,
+              kind: line.kind,
+              referenceId: line.id,
+            },
+          });
+
+          if (line.kind !== "product") continue;
+          const product = await tx.product.findUnique({
+            where: { id: line.id },
+            select: { id: true, name: true, stock: true },
+          });
+          if (!product) continue; // product was deleted — no stock to restore
+          await tx.product.updateMany({
+            where: { id: line.id },
+            data: { stock: { increment: line.qty } },
+          });
+          await tx.stockMovement.create({
+            data: {
+              productId: line.id,
+              productName: product.name,
+              type: "return",
+              qtyChange: line.qty,
+              qtyBefore: product.stock,
+              qtyAfter: product.stock + line.qty,
+              relatedOrderId: order.id,
+              note: `Refund ${order.id}${reason ? ` — ${reason}` : ""}`,
+              changedBy: username,
+            },
+          });
+        }
+
+        return { refundId: refundPaymentId, plan: refundPlan };
+      },
+      { timeout: 15000 }
+    );
+
+    logAudit(
+      "order_refund",
+      id,
+      `Refunded ${plan.refundedAmount} on order ${id} (${plan.refundedLines.length} line(s))${reason ? ` — ${reason}` : ""} by ${username || "unknown"}`
+    );
+    res.json({
+      orderId: id,
+      refundId,
+      refundedAmount: plan.refundedAmount,
+      refundedLines: plan.refundedLines.map(({ id: lineId, name, qty, amount, kind }) => ({
+        id: lineId, name, qty, amount, kind,
+      })),
+      remainingRefundable: plan.remainingRefundable,
+      fullyRefunded: plan.fullyRefunded,
+    });
+  } catch (e) {
+    if (e?.status === 400 || e?.status === 409) {
+      return res.status(e.status).json({ error: e.message });
+    }
+    log.error({ err: e }, "failed to refund order");
+    res.status(500).json({ error: "Failed to refund order" });
   }
 });
 

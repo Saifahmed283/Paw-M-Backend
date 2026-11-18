@@ -87,3 +87,127 @@ export async function restoreStockOnCancel(tx, existingItems) {
     });
   }
 }
+
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const money = (n) => Math.max(0, round2(n));
+
+// Refund labels are stored as "<qty>x <name>" on PaymentItem rows. Recover the
+// leading integer so prior refunds reduce the qty remaining for that line.
+function refundedQtyFromLabel(label) {
+  const match = /^\s*(\d+)\s*x(?:\s|$)/i.exec(String(label ?? ""));
+  const qty = Number(match?.[1] ?? 0);
+  return Number.isFinite(qty) ? qty : 0;
+}
+
+/**
+ * Pure refund planner. Given an order, its existing refund payments and an
+ * optional requested-line list, returns the amounts to write plus what will
+ * remain afterwards. No database access so the math can be unit-tested.
+ *
+ * @throws {Error} with `status` 400 for invalid/over-refund requests, 409 when
+ * the order has nothing left to refund.
+ */
+export function computeRefundPlan(order, payments = [], requestedItems) {
+  const orderLines = Array.isArray(order?.items) ? order.items : [];
+  const discount = Math.max(0, Number(order?.discountAmount ?? 0) || 0);
+
+  // Aggregate by line id (JSON order items are normally unique, but this keeps
+  // the totals correct if a duplicated id ever slips through).
+  const lines = new Map();
+  for (const item of orderLines) {
+    const id = String(item?.id ?? "");
+    if (!id) continue;
+    const qty = Math.max(0, Number(item?.qty ?? 0) || 0);
+    const gross = Math.max(0, Number(item?.price ?? 0) || 0) * qty;
+    const existing = lines.get(id) ?? {
+      id,
+      name: String(item?.name ?? ""),
+      kind: id.startsWith("service-") ? "service" : "product",
+      qty: 0,
+      gross: 0,
+    };
+    existing.qty += qty;
+    existing.gross += gross;
+    lines.set(id, existing);
+  }
+
+  const alreadyRefunded = new Map();
+  for (const payment of Array.isArray(payments) ? payments : []) {
+    if (payment?.kind !== "refund") continue;
+    for (const item of Array.isArray(payment.items) ? payment.items : []) {
+      const id = String(item?.referenceId ?? "");
+      const qty = refundedQtyFromLabel(item?.label);
+      if (!id || qty <= 0) continue;
+      alreadyRefunded.set(id, (alreadyRefunded.get(id) ?? 0) + qty);
+    }
+  }
+
+  const remainingLines = [...lines.values()].map((line) => {
+    const price = line.qty > 0 ? line.gross / line.qty : 0;
+    const refunded = alreadyRefunded.get(line.id) ?? 0;
+    return { ...line, price, refunded, remaining: Math.max(0, line.qty - refunded) };
+  });
+
+  if (remainingLines.every((line) => line.remaining <= 0)) {
+    throw Object.assign(new Error("Nothing left to refund on this order."), { status: 409 });
+  }
+
+  const requested = new Map();
+  for (const item of Array.isArray(requestedItems) ? requestedItems : []) {
+    const id = String(item?.id ?? "");
+    const qty = Number(item?.qty ?? 0);
+    if (!id || !Number.isInteger(qty) || qty <= 0) {
+      throw Object.assign(new Error("Invalid refund item."), { status: 400 });
+    }
+    requested.set(id, (requested.get(id) ?? 0) + qty);
+  }
+
+  const toRefund = requested.size === 0
+    ? remainingLines.filter((line) => line.remaining > 0).map((line) => ({ ...line, qty: line.remaining }))
+    : [...requested.entries()].map(([id, qty]) => {
+        const line = remainingLines.find((candidate) => candidate.id === id);
+        if (!line) {
+          throw Object.assign(new Error(`Line ${id} is not on this order.`), { status: 400 });
+        }
+        if (qty > line.remaining) {
+          throw Object.assign(
+            new Error(`Line ${id} — only ${line.remaining} left to refund.`),
+            { status: 400 }
+          );
+        }
+        return { ...line, qty };
+      });
+
+  const orderSubtotal = remainingLines.reduce((sum, line) => sum + line.gross, 0);
+  // Discount is spread across the whole order; each refund gets its
+  // proportional share. Cap it at the order subtotal to keep refunds non-negative
+  // even if legacy data carries an oversized discount.
+  const cappedDiscount = Math.min(discount, orderSubtotal);
+  const discountShare = (subtotal) =>
+    orderSubtotal > 0 ? (cappedDiscount * subtotal) / orderSubtotal : 0;
+
+  const refundedSubtotal = toRefund.reduce((sum, line) => sum + line.price * line.qty, 0);
+  const refundedAmount = money(refundedSubtotal - discountShare(refundedSubtotal));
+
+  const refundedByLine = new Map(toRefund.map((line) => [line.id, line.qty]));
+  const afterLines = remainingLines.map((line) =>
+    Math.max(0, line.remaining - (refundedByLine.get(line.id) ?? 0))
+  );
+  const remainingSubtotal = remainingLines.reduce(
+    (sum, line, index) => sum + line.price * afterLines[index],
+    0
+  );
+
+  return {
+    refundedLines: toRefund.map((line) => ({
+      id: line.id,
+      name: line.name,
+      qty: line.qty,
+      amount: money(line.price * line.qty),
+      kind: line.kind,
+    })),
+    refundedAmount,
+    remainingRefundable: money(remainingSubtotal - discountShare(remainingSubtotal)),
+    fullyRefunded: afterLines.every((qty) => qty <= 0),
+  };
+}

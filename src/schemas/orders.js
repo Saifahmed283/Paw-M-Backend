@@ -34,3 +34,17 @@ export const updateOrderPaymentSchema = z.object({
     paymentStatus: z.enum(["unpaid", "proof_submitted", "paid"]),
   }),
 });
+
+// Omitting `items` (or sending an empty array) means "refund everything still
+// refundable". Per-line quantities are checked against prior refunds in the
+// refund service, since that depends on stored Payment rows.
+export const refundOrderSchema = z.object({
+  params: z.object({ id: z.string().min(1) }),
+  body: z.object({
+    reason: z.string().max(200).optional().default(""),
+    items: z.array(z.object({
+      id: z.string().min(1).max(60),
+      qty: z.number().int().positive(),
+    })).optional().default([]),
+  }),
+});
