@@ -21,6 +21,10 @@ services:
     value: ${jwt_secret}
   - key: FRONTEND_URL
     value: https://pawmclinnic.com
+  # Without this, production CORS falls back to localhost-only defaults and
+  # every browser request from the live site is blocked.
+  - key: CORS_ORIGINS
+    value: https://pawmclinnic.com,https://www.pawmclinnic.com
   - key: PORT
     value: "8080"
 databases:

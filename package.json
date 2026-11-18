@@ -11,6 +11,8 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:seed": "node prisma/seed.js",
+    "db:import-products": "node scripts/import-products.js",
+    "db:import-products:apply": "node scripts/import-products.js --apply",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio"
   },
