@@ -6,17 +6,26 @@ import { archiveFinishedDayRecords } from "./lib/utils.js";
 
 const log = logger.child({ module: "server" });
 
-process.on("unhandledRejection", (reason) => {
-  log.error({ err: reason }, "unhandled rejection — keeping server alive");
-});
-
+// Ignore "aborted" errors from client disconnects - these are normal, not errors
 process.on("uncaughtException", (err) => {
+  if (err?.message === "aborted" || err?.code === "ECONNRESET") {
+    // Client disconnected during response - benign, ignore silently
+    return;
+  }
   log.fatal({ err }, "uncaught exception — server will exit");
   // stdout is a pipe inside a container, so the write is async. Exiting inline
   // can truncate the single most useful line when diagnosing a crash loop, so
   // flush first and keep a hard-exit backstop in case the flush never settles.
   logger.flush(() => process.exit(1));
   setTimeout(() => process.exit(1), 2000).unref();
+});
+
+process.on("unhandledRejection", (reason) => {
+  // Ignore "aborted" promise rejections from client disconnects
+  if (reason?.message === "aborted" || reason?.code === "ECONNRESET") {
+    return;
+  }
+  log.error({ err: reason }, "unhandled rejection — keeping server alive");
 });
 
 archiveFinishedDayRecords()

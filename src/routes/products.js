@@ -195,10 +195,23 @@ router.get("/:id/image", async (req, res) => {
     // instead of re-downloading multi-megabyte payloads on every dashboard visit.
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    return res.end(buffer);
+
+    // Handle client disconnect gracefully to avoid "Error: aborted" noise
+    const onClose = () => {
+      // Client disconnected before we could finish sending - this is normal
+      // and not an error condition, so we don't log it.
+    };
+    res.on("close", onClose);
+
+    return res.end(buffer, () => {
+      res.off("close", onClose);
+    });
   } catch (e) {
     log.error({ err: e }, "failed to serve product image");
-    res.status(500).json({ error: "Failed to fetch image" });
+    // Only send error response if headers haven't been sent yet
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to fetch image" });
+    }
   }
 });
 
