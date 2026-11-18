@@ -14,6 +14,28 @@ export async function createOrderTransactional(tx, body, isPos = false) {
     if (!id || !Number.isInteger(qty) || qty <= 0) {
       throw Object.assign(new Error("Invalid cart line."), { status: 400 });
     }
+
+    // Clinic services are not catalogue products: they hold no stock and the
+    // cashier enters the price for each visit manually. Keep them out of the
+    // product lookup/stock path (store checkouts never send service lines).
+    if (id.startsWith("service-")) {
+      if (!isPos) {
+        throw Object.assign(new Error("Invalid cart line."), { status: 400 });
+      }
+      const candidate = Number(item?.price);
+      if (!Number.isFinite(candidate) || candidate < 0) {
+        throw Object.assign(new Error("Invalid service price."), { status: 400 });
+      }
+      const name =
+        typeof item?.name === "string" && item.name.trim()
+          ? item.name.trim().slice(0, 200)
+          : id.slice(0, 200);
+      const price = Math.round(candidate * 100) / 100;
+      total += price * qty;
+      lines.push({ id, name, price, qty, image: "" });
+      continue;
+    }
+
     const product = await tx.product.findUnique({ where: { id } });
     if (!product) {
       throw Object.assign(new Error(`Product ${id} no longer exists.`), { status: 400 });
