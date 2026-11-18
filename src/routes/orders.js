@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { logAudit, nextId, fawryReference, todayStr } from "../lib/utils.js";
+import { logAudit, nextId, fawryReference } from "../lib/utils.js";
 import { validateProofImage } from "../services/orders.js";
 import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
@@ -13,6 +13,37 @@ import { attributeSaleToActiveSession } from "../services/session-attribution.js
 
 const router = Router();
 const log = logger.child({ module: "routes/orders" });
+const localDate = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+/** Keep the Finance-facing Payment row in sync when an order's status is decided manually. */
+async function syncOrderPaymentStatus(order, status) {
+  const linkedRows = await prisma.payment.findMany({
+    where: { orderId: order.id, kind: "order" },
+    take: 1,
+  });
+  const linked = Array.isArray(linkedRows) ? linkedRows[0] : null;
+  if (linked) {
+    await prisma.payment.update({ where: { id: linked.id }, data: { status } });
+    return;
+  }
+  // Legacy orders were created before sale payments existed — create one now.
+  await prisma.payment.create({
+    data: {
+      id: await nextId("PAY", "payment"),
+      title: `Order — ${order.customerName}`.slice(0, 200),
+      amount: order.total,
+      method: order.paymentMethod,
+      status,
+      date: localDate(),
+      notes: "Order payment",
+      orderId: order.id,
+      kind: "order",
+    },
+  });
+}
 
 router.get("/", authenticateUser, requireStaff, async (req, res) => {
   try {
@@ -62,10 +93,19 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
         const { total, lines, discountAmount, discountLabel } = await createOrderTransactional(tx, body, isPos);
         const proofRef = (body.paymentRef || "").trim();
         const isInstaPay = paymentMethod === "instapay";
+        const isCash = paymentMethod === "cash";
         const hasProof = Boolean(proofRef) || Boolean(proofImage);
-        const paymentStatus = paymentMethod === "fawry" ? "unpaid" : isInstaPay && hasProof ? "proof_submitted" : "unpaid";
+        // A completed cash sale is confirmed and paid on the spot. InstaPay and
+        // Fawry stay open for staff confirmation (proof review / voucher check).
+        const paymentStatus = isCash
+          ? "paid"
+          : paymentMethod === "fawry"
+            ? "unpaid"
+            : isInstaPay && hasProof
+              ? "proof_submitted"
+              : "unpaid";
 
-        return tx.order.create({
+        const order = await tx.order.create({
           data: {
             id: await nextId("ORD", "order"),
             clientId: req.client?.id ?? null,
@@ -75,8 +115,10 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
             address: body.address,
             items: lines,
             total,
+            status: isCash ? "confirmed" : "pending",
             paymentMethod,
             paymentStatus,
+            paidAt: isCash ? new Date() : null,
             paymentRef: paymentMethod === "fawry" ? fawryReference() : proofRef.slice(0, 120),
             proofImage: isInstaPay ? proofImage.slice(0, 8_000_000) : "",
             source: isPos ? "pos" : "store",
@@ -84,6 +126,41 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
             discountLabel,
           },
         });
+
+        // Every sale produces a categorized Payment row so Finance collects from
+        // one source of truth. Cash is already paid; other methods are pending
+        // and become paid when staff confirm them.
+        const paymentItems = lines.map((line) => ({
+          label: `${line.qty}x ${line.name}`.slice(0, 200),
+          amount: Math.round(line.price * line.qty * 100) / 100,
+          kind: line.id.startsWith("service-") ? "service" : "product",
+          referenceId: line.id.slice(0, 60),
+        }));
+        if (discountAmount > 0) {
+          paymentItems.push({
+            label: (discountLabel || "Discount").slice(0, 200),
+            amount: -Math.round(discountAmount * 100) / 100,
+            kind: "other",
+            referenceId: "",
+          });
+        }
+        await tx.payment.create({
+          data: {
+            id: await nextId("PAY", "payment"),
+            title: `${isPos ? "POS" : "Store"} — ${order.customerName}`.slice(0, 200),
+            amount: total,
+            method: paymentMethod,
+            status: paymentStatus,
+            date: localDate(),
+            notes: isPos ? "Point of sale" : "Store checkout",
+            orderId: order.id,
+            kind: "order",
+            requestedBy: req.user?.username ?? "",
+            items: { create: paymentItems },
+          },
+        });
+
+        return order;
       },
       { timeout: 15000 }
     );
@@ -151,7 +228,7 @@ router.post("/:id/refund", authenticateUser, requireStaff, validate(refundOrderS
             amount: -refundPlan.refundedAmount,
             method: order.paymentMethod,
             status: "paid",
-            date: todayStr(),
+            date: localDate(),
             notes: reason,
             orderId: order.id,
             kind: "refund",
@@ -264,6 +341,7 @@ router.post("/:id/payment-proof", optionalClientOrStaff, async (req, res) => {
         paymentStatus: "proof_submitted",
       },
     });
+    await syncOrderPaymentStatus(updated, "proof_submitted");
     res.json(updated);
   } catch {
     res.status(404).json({ error: "Order not found" });
@@ -280,6 +358,7 @@ router.patch("/:id/payment", authenticateUser, requireStaff, validate(updateOrde
       where: { id },
       data: { paymentStatus, paidAt: paymentStatus === "paid" ? new Date() : null },
     });
+    await syncOrderPaymentStatus(updated, paymentStatus);
     logAudit("order_payment", id, `Order ${updated.customerName} marked ${paymentStatus} (${updated.paymentMethod})`);
 
     const { sendMail, buildPaymentSuccessEmail, buildPaymentFailedEmail } = await import("../lib/email.js");
