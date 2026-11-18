@@ -136,6 +136,17 @@ app.use("/api/settings", sensitiveLimiter);
 // ── Routes ───────────────────────────────────────────────────────────────────
 app.use("/api", routes);
 
+// ── Graceful handling of client disconnects (prevents "Error: aborted" noise) ──
+// This catches the "aborted" error emitted when a client closes the connection
+// before the response finishes. It's normal behavior, not a server error.
+app.use((err, req, res, next) => {
+  if (err?.code === "ECONNRESET" || err?.message === "aborted" || err?.name === "AbortError") {
+    // Client disconnected - this is normal, don't log as error
+    return;
+  }
+  next(err);
+});
+
 // ── Error handling ───────────────────────────────────────────────────────────
 app.use(notFoundHandler);
 app.use(errorHandler);
