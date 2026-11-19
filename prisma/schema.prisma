@@ -133,6 +133,7 @@ model AdminUser {
   salt      String
   hash      String
   role      StaffRole  @default(staff)
+  isActive  Boolean    @default(true)
   createdAt DateTime   @default(now())
 }
 

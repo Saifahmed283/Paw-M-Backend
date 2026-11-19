@@ -81,11 +81,16 @@ router.delete("/:id", authenticateUser, requireAdmin, async (req, res) => {
   try {
     const existing = await prisma.employee.findUnique({ where: { id: req.params.id } });
     if (!existing) return res.status(404).json({ error: "Employee not found" });
-    await prisma.employee.update({ where: { id: req.params.id }, data: { isActive: false, updatedAt: new Date() } });
-    res.json({ message: "Employee deactivated successfully" });
+    await prisma.employee.delete({ where: { id: req.params.id } });
+    res.json({ ok: true, message: "Employee deleted successfully" });
   } catch (error) {
-    log.error({ err: error }, "failed to deactivate employee");
-    res.status(500).json({ error: "Failed to deactivate employee" });
+    if (error.code === "P2003") {
+      return res
+        .status(409)
+        .json({ error: "Cannot delete employee with existing records. Suspend instead." });
+    }
+    log.error({ err: error }, "failed to delete employee");
+    res.status(500).json({ error: "Failed to delete employee" });
   }
 });
 

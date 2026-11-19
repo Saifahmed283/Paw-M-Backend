@@ -8,7 +8,15 @@ import { logAudit } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
 import { validate } from "../middleware/validate.js";
 import { authenticateUser, requireAdmin } from "../middleware/auth.js";
-import { loginSchema, registerSchema, changeCredentialsSchema, createAccountSchema, updateAccountRoleSchema } from "../schemas/auth.js";
+import {
+  loginSchema,
+  registerSchema,
+  changeCredentialsSchema,
+  createAccountSchema,
+  updateAccountRoleSchema,
+  updateAccountSchema,
+  accountIdParamSchema,
+} from "../schemas/auth.js";
 import { sendMail, buildPasswordResetEmail } from "../lib/email.js";
 
 const router = Router();
@@ -122,7 +130,7 @@ router.post("/register", validate(registerSchema), async (req, res) => {
     const salt = bcrypt.genSaltSync(BCRYPT_ROUNDS);
     const hash = hashPassword(password, salt);
     const user = await prisma.adminUser.create({
-      data: { username: name, salt, hash, role: "staff" },
+      data: { username: name, salt, hash, role: "staff", isActive: true },
     });
     const token = signToken(user);
     setSessionCookie(res, token);
@@ -142,14 +150,16 @@ router.post("/login", validate(loginSchema), async (req, res) => {
     if (!user) return res.json({ ok: false });
     const hash = hashPassword(password, user.salt);
     const ok = constantTimeCompare(hash, user.hash);
-    if (ok) {
-      const token = signToken(user);
-      setSessionCookie(res, token);
-      logAudit("login", "", `Staff sign-in: ${name} [${user.role}]`);
-      res.json({ ok, role: user.role, token });
-    } else {
-      res.json({ ok, role: undefined });
+    if (!ok) {
+      return res.json({ ok: false, role: undefined });
     }
+    if (user.isActive === false) {
+      return res.status(403).json({ error: "Account suspended" });
+    }
+    const token = signToken(user);
+    setSessionCookie(res, token);
+    logAudit("login", "", `Staff sign-in: ${name} [${user.role}]`);
+    res.json({ ok: true, role: user.role, token });
   } catch (e) {
     log.error({ err: e }, "login failed");
     res.status(500).json({ error: "Failed to verify credentials" });
@@ -162,7 +172,13 @@ router.post("/logout", (_req, res) => {
 });
 
 // ---- Account management (admin only) ----
-const ACCOUNT_SELECT = { id: true, username: true, role: true, createdAt: true };
+const ACCOUNT_SELECT = { id: true, username: true, role: true, isActive: true, createdAt: true };
+
+async function countActiveAdmins(excludeId) {
+  return prisma.adminUser.count({
+    where: { role: "admin", isActive: true, ...(excludeId ? { NOT: { id: excludeId } } : {}) },
+  });
+}
 
 router.get("/accounts", authenticateUser, requireAdmin, async (_req, res) => {
   try {
@@ -184,35 +200,140 @@ router.post("/accounts", authenticateUser, requireAdmin, validate(createAccountS
     if (exists) return res.status(409).json({ error: `Username "${username}" already exists.` });
     const salt = bcrypt.genSaltSync(BCRYPT_ROUNDS);
     const hash = hashPassword(password, salt);
-    const user = await prisma.adminUser.create({ data: { username, salt, hash, role } });
-    logAudit("create_account", String(user.id), `Account created: ${user.username} (${user.role}) by ${req.user.username}`);
-    res.status(201).json({ id: user.id, username: user.username, role: user.role, createdAt: user.createdAt });
+    const user = await prisma.adminUser.create({
+      data: { username, salt, hash, role, isActive: true },
+      select: ACCOUNT_SELECT,
+    });
+    logAudit(
+      "create_account",
+      String(user.id),
+      `Account created: ${user.username} (${user.role}) by ${req.user.username}`,
+    );
+    res.status(201).json(user);
   } catch (e) {
     log.error({ err: e }, "failed to create account");
     res.status(500).json({ error: "Failed to create account" });
   }
 });
 
-router.patch("/accounts/:id/role", authenticateUser, requireAdmin, validate(updateAccountRoleSchema), async (req, res) => {
-  const { id } = req.validated.params;
-  const { role } = req.validated.body;
-  try {
-    const target = await prisma.adminUser.findUnique({ where: { id }, select: ACCOUNT_SELECT });
-    if (!target) return res.status(404).json({ error: "Account not found" });
-    if (target.role === "admin" && role !== "admin") {
-      const adminCount = await prisma.adminUser.count({ where: { role: "admin" } });
-      if (adminCount <= 1) {
-        return res.status(400).json({ error: "Cannot demote the last admin account." });
+router.patch(
+  "/accounts/:id/role",
+  authenticateUser,
+  requireAdmin,
+  validate(updateAccountRoleSchema),
+  async (req, res) => {
+    const { id } = req.validated.params;
+    const { role } = req.validated.body;
+    try {
+      const target = await prisma.adminUser.findUnique({ where: { id }, select: ACCOUNT_SELECT });
+      if (!target) return res.status(404).json({ error: "Account not found" });
+      if (target.role === "admin" && role !== "admin" && target.isActive) {
+        const remaining = await countActiveAdmins(id);
+        if (remaining < 1) {
+          return res.status(400).json({ error: "Cannot demote the last active admin account." });
+        }
       }
+      const user = await prisma.adminUser.update({
+        where: { id },
+        data: { role },
+        select: ACCOUNT_SELECT,
+      });
+      logAudit(
+        "update_account_role",
+        String(user.id),
+        `Role changed ${target.username}: ${target.role} -> ${role} by ${req.user.username}`,
+      );
+      res.json(user);
+    } catch (e) {
+      log.error({ err: e }, "failed to update account role");
+      res.status(500).json({ error: "Failed to update account role" });
     }
-    const user = await prisma.adminUser.update({ where: { id }, data: { role }, select: ACCOUNT_SELECT });
-    logAudit("update_account_role", String(user.id), `Role changed ${target.username}: ${target.role} -> ${role} by ${req.user.username}`);
-    res.json(user);
-  } catch (e) {
-    log.error({ err: e }, "failed to update account role");
-    res.status(500).json({ error: "Failed to update account role" });
-  }
-});
+  },
+);
+
+router.patch(
+  "/accounts/:id",
+  authenticateUser,
+  requireAdmin,
+  validate(updateAccountSchema),
+  async (req, res) => {
+    const { id } = req.validated.params;
+    const { username, password, role, isActive } = req.validated.body;
+    try {
+      const target = await prisma.adminUser.findUnique({ where: { id }, select: ACCOUNT_SELECT });
+      if (!target) return res.status(404).json({ error: "Account not found" });
+
+      const nextActive = isActive ?? target.isActive;
+      const nextRole = role ?? target.role;
+      const removingAdminPower = target.role === "admin" && target.isActive && !(nextRole === "admin" && nextActive);
+      if (removingAdminPower) {
+        const remaining = await countActiveAdmins(id);
+        if (remaining < 1) {
+          return res.status(400).json({ error: "Cannot remove or suspend the last active admin account." });
+        }
+      }
+
+      if (username && username !== target.username) {
+        const taken = await prisma.adminUser.findUnique({ where: { username } });
+        if (taken) return res.status(409).json({ error: `Username "${username}" already exists.` });
+      }
+
+      const data = {};
+      if (username !== undefined) data.username = username;
+      if (role !== undefined) data.role = role;
+      if (isActive !== undefined) data.isActive = isActive;
+      if (password !== undefined) {
+        const salt = bcrypt.genSaltSync(BCRYPT_ROUNDS);
+        data.salt = salt;
+        data.hash = hashPassword(password, salt);
+      }
+
+      const user = await prisma.adminUser.update({ where: { id }, data, select: ACCOUNT_SELECT });
+      const parts = [];
+      if (username !== undefined && username !== target.username) parts.push(`username -> ${username}`);
+      if (role !== undefined && role !== target.role) parts.push(`role ${target.role} -> ${role}`);
+      if (isActive !== undefined && isActive !== target.isActive) parts.push(isActive ? "activated" : "suspended");
+      if (password !== undefined) parts.push("password reset");
+      logAudit("update_account", String(user.id), `Account ${target.username}: ${parts.join(", ") || "no changes"} by ${req.user.username}`);
+      res.json(user);
+    } catch (e) {
+      if (e.code === "P2002") {
+        return res.status(409).json({ error: "Username already exists." });
+      }
+      log.error({ err: e }, "failed to update account");
+      res.status(500).json({ error: "Failed to update account" });
+    }
+  },
+);
+
+router.delete(
+  "/accounts/:id",
+  authenticateUser,
+  requireAdmin,
+  validate(accountIdParamSchema),
+  async (req, res) => {
+    const { id } = req.validated.params;
+    try {
+      const target = await prisma.adminUser.findUnique({ where: { id }, select: ACCOUNT_SELECT });
+      if (!target) return res.status(404).json({ error: "Account not found" });
+      if (req.user?.id === id) {
+        return res.status(400).json({ error: "You cannot delete your own account." });
+      }
+      if (target.role === "admin" && target.isActive) {
+        const remaining = await countActiveAdmins(id);
+        if (remaining < 1) {
+          return res.status(400).json({ error: "Cannot delete the last active admin account." });
+        }
+      }
+      await prisma.adminUser.delete({ where: { id } });
+      logAudit("delete_account", String(id), `Account deleted: ${target.username} (${target.role}) by ${req.user.username}`);
+      res.json({ ok: true });
+    } catch (e) {
+      log.error({ err: e }, "failed to delete account");
+      res.status(500).json({ error: "Failed to delete account" });
+    }
+  },
+);
 
 router.get("/me", async (req, res) => {
   const authHeader = req.headers.authorization;
@@ -223,9 +344,9 @@ router.get("/me", async (req, res) => {
     const decoded = jwt.verify(token, config.jwtSecret);
     const user = await prisma.adminUser.findUnique({
       where: { id: decoded.id },
-      select: { id: true, username: true, role: true },
+      select: { id: true, username: true, role: true, isActive: true },
     });
-    if (!user) return res.json({ authenticated: false });
+    if (!user || user.isActive === false) return res.json({ authenticated: false });
     res.json({ authenticated: true, id: user.id, username: user.username, role: user.role });
   } catch {
     res.json({ authenticated: false });
@@ -272,7 +393,7 @@ router.post("/forgot-password", async (req, res) => {
   try {
     if (!name) return res.json(generic);
     const user = await prisma.adminUser.findUnique({ where: { username: name } });
-    if (!user) return res.json(generic);
+    if (!user || user.isActive === false) return res.json(generic);
 
     const code = String(randomInt(0, 999999)).padStart(6, "0");
     passwordResets.set(name, { code, expiresAt: Date.now() + 15 * 60 * 1000 });
@@ -316,7 +437,7 @@ router.post("/reset-password", async (req, res) => {
     }
 
     const user = await prisma.adminUser.findUnique({ where: { username: name } });
-    if (!user) {
+    if (!user || user.isActive === false) {
       passwordResets.delete(name);
       return res.status(400).json({ error: "Invalid or expired reset code." });
     }

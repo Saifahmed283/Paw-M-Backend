@@ -63,10 +63,16 @@ export function authenticateUser(req, res, next) {
   }
 
   prisma.adminUser
-    .findUnique({ where: { id: decoded.id }, select: { id: true, username: true, role: true } })
+    .findUnique({
+      where: { id: decoded.id },
+      select: { id: true, username: true, role: true, isActive: true },
+    })
     .then((user) => {
       if (!user) {
         return res.status(401).json({ error: "User not found" });
+      }
+      if (user.isActive === false) {
+        return res.status(403).json({ error: "Account suspended" });
       }
       req.user = { id: user.id, username: user.username, role: user.role };
       next();
