@@ -42,6 +42,33 @@ describe("Payment visit-request schemas", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts proof_submitted as a payment status on create and update", () => {
+    expect(
+      createPaymentSchema.safeParse({
+        body: { title: "InstaPay transfer", amount: 100, status: "proof_submitted" },
+      }).success
+    ).toBe(true);
+    expect(
+      updatePaymentSchema.safeParse({
+        params: { id: "pay-1" },
+        body: { status: "proof_submitted" },
+      }).success
+    ).toBe(true);
+  });
+
+  it("accepts a negative discount (other) line item", () => {
+    const result = createPaymentSchema.safeParse({
+      body: {
+        title: "Order with discount",
+        items: [
+          { label: "Food", amount: 200, kind: "product" },
+          { label: "Discount", amount: -50, kind: "other" },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts the legacy manual payment payload", () => {
     const result = createPaymentSchema.safeParse({
       body: {

@@ -5,6 +5,7 @@ import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireStaff } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
+import { canonicalOrderPayment, syncPaymentToOrder } from "../services/payment-status.js";
 import {
   addPaymentItemsSchema,
   createPaymentSchema,
@@ -79,6 +80,16 @@ router.post("/", authenticateUser, requireStaff, validate(createPaymentSchema), 
       if (!data.requestedBy) data.requestedBy = req.user?.username ?? "";
     }
 
+    if (body.kind === "order" && data.orderId) {
+      const order = await prisma.order.findUnique({ where: { id: data.orderId }, select: { id: true } });
+      if (!order) return res.status(400).json({ error: "Order not found" });
+      // One canonical finance row per sale — duplicates make collected totals
+      // wrong and break status sync between the Order and Payment tables.
+      if (await canonicalOrderPayment(prisma, data.orderId)) {
+        return res.status(409).json({ error: "A finance record already exists for this order" });
+      }
+    }
+
     const items = Array.isArray(body.items) ? body.items : [];
     const itemTotal = round2(items.reduce((sum, it) => sum + Number(it.amount || 0), 0));
     data.amount = round2(body.amount ?? itemTotal ?? 0);
@@ -86,23 +97,27 @@ router.post("/", authenticateUser, requireStaff, validate(createPaymentSchema), 
       return res.status(400).json({ error: "Amount must be positive" });
     }
 
-    const created = await prisma.payment.create({
-      data: {
-        ...data,
-        amount: data.amount,
-        items: items.length
-          ? {
-              create: items.map((it) => ({
-                label: it.label,
-                amount: round2(it.amount),
-                kind: it.kind,
-                referenceId: it.referenceId ?? "",
-              })),
-            }
-          : undefined,
-      },
-      include: paymentInclude,
-    });
+    const created = await prisma.$transaction(async (tx) => {
+      const row = await tx.payment.create({
+        data: {
+          ...data,
+          amount: data.amount,
+          items: items.length
+            ? {
+                create: items.map((it) => ({
+                  label: it.label,
+                  amount: round2(it.amount),
+                  kind: it.kind,
+                  referenceId: it.referenceId ?? "",
+                })),
+              }
+            : undefined,
+        },
+        include: paymentInclude,
+      });
+      await syncPaymentToOrder(tx, row);
+      return row;
+    }, { timeout: 15000 });
     logAudit(
       "payment_create",
       created.id,
@@ -120,15 +135,44 @@ router.patch("/:id", authenticateUser, requireStaff, validate(updatePaymentSchem
   const patch = req.validated.body;
   try {
     if (patch.amount !== undefined) patch.amount = round2(patch.amount);
-    const updated = await prisma.payment.update({
-      where: { id },
-      data: patch,
-      include: paymentInclude,
-    });
+    const updated = await prisma.$transaction(async (tx) => {
+      const existing = await tx.payment.findUnique({ where: { id } });
+      if (!existing) return null;
+      if (patch.orderId && (patch.orderId !== existing.orderId || patch.kind === "order")) {
+        const order = await tx.order.findUnique({ where: { id: patch.orderId }, select: { id: true } });
+        if (!order) {
+          const err = new Error("Order not found");
+          err.status = 400;
+          throw err;
+        }
+      }
+      const row = await tx.payment.update({
+        where: { id },
+        data: patch,
+        include: paymentInclude,
+      });
+      // Status/link changes flow back to the Order so both views agree.
+      if (patch.status !== undefined || patch.orderId !== undefined) {
+        await syncPaymentToOrder(tx, row);
+        if (existing.orderId && existing.orderId !== row.orderId) {
+          const oldOrder = await tx.order.findUnique({ where: { id: existing.orderId } });
+          if (oldOrder && oldOrder.paymentStatus === existing.status) {
+            await tx.order.update({
+              where: { id: existing.orderId },
+              data: { paymentStatus: "unpaid", paidAt: null },
+            });
+          }
+        }
+      }
+      return row;
+    }, { timeout: 15000 });
+    if (!updated) return res.status(404).json({ error: "Payment not found" });
     logAudit("payment_update", id, `Updated payment "${updated.title}"`);
     res.json(updated);
-  } catch {
-    res.status(404).json({ error: "Payment not found" });
+  } catch (e) {
+    if (e?.status === 400) return res.status(400).json({ error: e.message });
+    log.error({ err: e }, "failed to update payment");
+    res.status(500).json({ error: "Failed to update payment" });
   }
 });
 
@@ -168,29 +212,37 @@ router.post("/:id/settle", authenticateUser, requireStaff, validate(settlePaymen
   const { id } = req.validated.params;
   const { method, notes } = req.validated.body;
   try {
-    const existing = await prisma.payment.findUnique({
-      where: { id },
-      include: { items: true },
-    });
-    if (!existing) return res.status(404).json({ error: "Payment not found" });
-    if (existing.status === "paid") {
-      return res.status(400).json({ error: "Payment is already settled" });
-    }
-    const fromItems = round2(existing.items.reduce((sum, it) => sum + Number(it.amount || 0), 0));
-    const amount = fromItems > 0 ? fromItems : round2(existing.amount);
-    const updated = await prisma.payment.update({
-      where: { id },
-      data: {
-        status: "paid",
-        method: method ?? existing.method,
-        amount,
-        notes: [existing.notes, notes].filter(Boolean).join("\n").slice(0, 1000),
-      },
-      include: paymentInclude,
-    });
-    logAudit("payment_settle", id, `Settled "${updated.title}" (${updated.method}, ${updated.amount})`);
+    const updated = await prisma.$transaction(async (tx) => {
+      const existing = await tx.payment.findUnique({
+        where: { id },
+        include: { items: true },
+      });
+      if (!existing) return null;
+      if (existing.status === "paid") {
+        const err = new Error("Payment is already settled");
+        err.status = 400;
+        throw err;
+      }
+      const fromItems = round2(existing.items.reduce((sum, it) => sum + Number(it.amount || 0), 0));
+      const amount = fromItems > 0 ? fromItems : round2(existing.amount);
+      const row = await tx.payment.update({
+        where: { id },
+        data: {
+          status: "paid",
+          method: method ?? existing.method,
+          amount,
+          notes: [existing.notes, notes].filter(Boolean).join("\n").slice(0, 1000),
+        },
+        include: paymentInclude,
+      });
+      await syncPaymentToOrder(tx, row);
+      return row;
+    }, { timeout: 15000 });
+    if (!updated) return res.status(404).json({ error: "Payment not found" });
+    logAudit("payment_settle", updated.id, `Settled "${updated.title}" (${updated.method}, ${updated.amount})`);
     res.json(updated);
   } catch (e) {
+    if (e?.status === 400) return res.status(400).json({ error: e.message });
     log.error({ err: e }, "failed to settle payment");
     res.status(500).json({ error: "Failed to settle payment" });
   }
@@ -199,12 +251,28 @@ router.post("/:id/settle", authenticateUser, requireStaff, validate(settlePaymen
 router.delete("/:id", authenticateUser, requireStaff, async (req, res) => {
   const { id } = req.params;
   try {
-    const existing = await prisma.payment.findUnique({ where: { id } });
-    await prisma.payment.delete({ where: { id } });
-    logAudit("payment_delete", id, `Deleted payment "${existing?.title ?? "unknown"}"`);
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await tx.payment.findUnique({ where: { id } });
+      if (!existing) return null;
+      await tx.payment.delete({ where: { id } });
+      // Removing the finance row must not leave its sale looking paid.
+      if (existing.kind === "order" && existing.orderId) {
+        const order = await tx.order.findUnique({ where: { id: existing.orderId } });
+        if (order && order.paymentStatus === existing.status) {
+          await tx.order.update({
+            where: { id: existing.orderId },
+            data: { paymentStatus: "unpaid", paidAt: null },
+          });
+        }
+      }
+      return existing;
+    }, { timeout: 15000 });
+    if (!result) return res.status(404).json({ error: "Payment not found" });
+    logAudit("payment_delete", id, `Deleted payment "${result.title ?? "unknown"}"`);
     res.status(204).send();
-  } catch {
-    res.status(404).json({ error: "Payment not found" });
+  } catch (e) {
+    log.error({ err: e }, "failed to delete payment");
+    res.status(500).json({ error: "Failed to delete payment" });
   }
 });
 

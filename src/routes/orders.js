@@ -6,8 +6,9 @@ import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireStaff, authenticateClient, authenticateClientOrStaff, optionalClientOrStaff } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { createOrderSchema, updateOrderStatusSchema, updateOrderPaymentSchema, refundOrderSchema } from "../schemas/orders.js";
+import { createOrderSchema, updateOrderStatusSchema, updateOrderPaymentSchema, submitPaymentProofSchema, refundOrderSchema } from "../schemas/orders.js";
 import { createOrderTransactional, restoreStockOnCancel, computeRefundPlan } from "../services/orders.js";
+import { syncOrderPaymentStatus } from "../services/payment-status.js";
 import { createBroadcastNotification } from "../lib/notify.js";
 import { attributeSaleToActiveSession } from "../services/session-attribution.js";
 
@@ -17,33 +18,6 @@ const localDate = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
-
-/** Keep the Finance-facing Payment row in sync when an order's status is decided manually. */
-async function syncOrderPaymentStatus(order, status) {
-  const linkedRows = await prisma.payment.findMany({
-    where: { orderId: order.id, kind: "order" },
-    take: 1,
-  });
-  const linked = Array.isArray(linkedRows) ? linkedRows[0] : null;
-  if (linked) {
-    await prisma.payment.update({ where: { id: linked.id }, data: { status } });
-    return;
-  }
-  // Legacy orders were created before sale payments existed — create one now.
-  await prisma.payment.create({
-    data: {
-      id: await nextId("PAY", "payment"),
-      title: `Order — ${order.customerName}`.slice(0, 200),
-      amount: order.total,
-      method: order.paymentMethod,
-      status,
-      date: localDate(),
-      notes: "Order payment",
-      orderId: order.id,
-      kind: "order",
-    },
-  });
-}
 
 router.get("/", authenticateUser, requireStaff, async (req, res) => {
   try {
@@ -92,18 +66,12 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
         const isPos = Boolean(req.user) && body.source === "pos";
         const { total, lines, discountAmount, discountLabel } = await createOrderTransactional(tx, body, isPos);
         const proofRef = (body.paymentRef || "").trim();
-        const isInstaPay = paymentMethod === "instapay";
         const isCash = paymentMethod === "cash";
+        const needsProof = paymentMethod === "instapay" || paymentMethod === "fawry";
         const hasProof = Boolean(proofRef) || Boolean(proofImage);
-        // A completed cash sale is confirmed and paid on the spot. InstaPay and
-        // Fawry stay open for staff confirmation (proof review / voucher check).
-        const paymentStatus = isCash
-          ? "paid"
-          : paymentMethod === "fawry"
-            ? "unpaid"
-            : isInstaPay && hasProof
-              ? "proof_submitted"
-              : "unpaid";
+        // Cash is settled on the spot. InstaPay/Fawry are only done after staff
+        // reviews the submitted proof; with proof attached they enter review.
+        const paymentStatus = isCash ? "paid" : needsProof && hasProof ? "proof_submitted" : "unpaid";
 
         const order = await tx.order.create({
           data: {
@@ -119,8 +87,11 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
             paymentMethod,
             paymentStatus,
             paidAt: isCash ? new Date() : null,
-            paymentRef: paymentMethod === "fawry" ? fawryReference() : proofRef.slice(0, 120),
-            proofImage: isInstaPay ? proofImage.slice(0, 8_000_000) : "",
+            // Keep a customer-supplied Fawry voucher; generate a reference only
+            // when they have not provided one (the old flow discarded both the
+            // ref and the proof image for Fawry).
+            paymentRef: paymentMethod === "fawry" && !proofRef ? fawryReference() : proofRef.slice(0, 120),
+            proofImage: needsProof ? proofImage.slice(0, 8_000_000) : "",
             source: isPos ? "pos" : "store",
             discountAmount,
             discountLabel,
@@ -182,7 +153,7 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
           orderId: created.id,
           total: created.total,
           paymentMethod: created.paymentMethod,
-          paymentRef: created.paymentMethod === "fawry" ? created.paymentRef : "",
+          paymentRef: created.paymentMethod !== "cash" ? created.paymentRef : "",
           clinicName,
         }));
       }).catch(() => {});
@@ -200,8 +171,8 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
   }
 });
 
-// Staff-only refunds. The order itself is the invoice: POS cash sales are
-// stored as unpaid, so paymentStatus is deliberately not checked here.
+// Staff-only refunds. The order itself is the invoice: refunds are allowed for
+// any settled sale, so paymentStatus is deliberately not checked here.
 router.post("/:id/refund", authenticateUser, requireStaff, validate(refundOrderSchema), async (req, res) => {
   const { id } = req.validated.params;
   const { reason, items } = req.validated.body;
@@ -301,11 +272,11 @@ router.post("/:id/refund", authenticateUser, requireStaff, validate(refundOrderS
   }
 });
 
-router.post("/:id/payment-proof", optionalClientOrStaff, async (req, res) => {
-  const { id } = req.params;
-  const body = req.body ?? {};
-  const paymentRef = String(body.paymentRef ?? "").trim();
-  const proofImage = String(body.proofImage ?? "").trim();
+router.post("/:id/payment-proof", optionalClientOrStaff, validate(submitPaymentProofSchema), async (req, res) => {
+  const { id } = req.validated.params;
+  const { paymentRef: rawRef, proofImage: rawImage, phone } = req.validated.body;
+  const paymentRef = rawRef.trim();
+  const proofImage = rawImage.trim();
   if (!paymentRef && !proofImage) {
     return res.status(400).json({ error: "Provide a transaction reference or a proof image." });
   }
@@ -319,6 +290,12 @@ router.post("/:id/payment-proof", optionalClientOrStaff, async (req, res) => {
     if (existing.paymentStatus === "paid") {
       return res.status(400).json({ error: "This order is already marked as paid." });
     }
+    if (existing.paymentMethod === "cash") {
+      return res.status(400).json({ error: "Cash orders are paid at checkout — no proof is needed." });
+    }
+    if (existing.paymentStatus === "proof_submitted" && !req.user) {
+      return res.status(409).json({ error: "Proof is already under review." });
+    }
 
     // Staff may act on any order. A signed-in client must own the order. A
     // guest proves ownership the same way as the public tracker: order id +
@@ -328,44 +305,68 @@ router.post("/:id/payment-proof", optionalClientOrStaff, async (req, res) => {
       return res.status(403).json({ error: "You can only submit proof for your own order." });
     }
     if (!req.user && !req.client) {
-      if (!body.phone || String(body.phone).trim() !== existing.phone) {
+      if (!phone || String(phone).trim() !== existing.phone) {
         return res.status(403).json({ error: "Phone number does not match this order." });
       }
     }
 
-    const updated = await prisma.order.update({
-      where: { id },
-      data: {
-        paymentRef: paymentRef || existing.paymentRef,
-        proofImage: proofImage || existing.proofImage,
-        paymentStatus: "proof_submitted",
-      },
-    });
-    await syncOrderPaymentStatus(updated, "proof_submitted");
+    const updated = await prisma.$transaction(async (tx) => {
+      const order = await tx.order.update({
+        where: { id },
+        data: {
+          paymentRef: paymentRef || existing.paymentRef,
+          proofImage: proofImage || existing.proofImage,
+          paymentStatus: "proof_submitted",
+        },
+      });
+      await syncOrderPaymentStatus(tx, order, "proof_submitted");
+      return order;
+    }, { timeout: 15000 });
+    logAudit("order_proof", id, `Payment proof submitted for ${updated.customerName}'s order`);
     res.json(updated);
-  } catch {
-    res.status(404).json({ error: "Order not found" });
+  } catch (e) {
+    if (e?.status === 400) return res.status(400).json({ error: e.message });
+    log.error({ err: e }, "failed to submit payment proof");
+    res.status(500).json({ error: "Failed to submit payment proof" });
   }
 });
 
 router.patch("/:id/payment", authenticateUser, requireStaff, validate(updateOrderPaymentSchema), async (req, res) => {
   const { id } = req.validated.params;
-  const { paymentStatus } = req.validated.body;
+  const { paymentStatus, paymentMethod } = req.validated.body;
   try {
     const existing = await prisma.order.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: "Order not found" });
-    const updated = await prisma.order.update({
-      where: { id },
-      data: { paymentStatus, paidAt: paymentStatus === "paid" ? new Date() : null },
-    });
-    await syncOrderPaymentStatus(updated, paymentStatus);
+    if (paymentStatus === "paid") {
+      if (existing.status === "cancelled") {
+        return res.status(400).json({ error: "A cancelled order cannot be marked as paid." });
+      }
+      // InstaPay/Fawry must carry proof before staff can finish verification.
+      if (existing.paymentMethod !== "cash" && existing.paymentStatus === "unpaid" && !existing.paymentRef && !existing.proofImage) {
+        return res.status(400).json({ error: "Payment proof has not been submitted yet." });
+      }
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const order = await tx.order.update({
+        where: { id },
+        data: {
+          paymentStatus,
+          ...(paymentMethod ? { paymentMethod } : {}),
+          paidAt: paymentStatus === "paid" ? (existing.paidAt ?? new Date()) : null,
+          ...(paymentStatus === "paid" && existing.status === "pending" ? { status: "confirmed" } : {}),
+        },
+      });
+      await syncOrderPaymentStatus(tx, order, paymentStatus, { method: order.paymentMethod });
+      return order;
+    }, { timeout: 15000 });
     logAudit("order_payment", id, `Order ${updated.customerName} marked ${paymentStatus} (${updated.paymentMethod})`);
 
     const { sendMail, buildPaymentSuccessEmail, buildPaymentFailedEmail } = await import("../lib/email.js");
     if (existing.email) {
       const clinicSettings = await prisma.clinicSettings.findUnique({ where: { id: 1 } }).catch(() => null);
       const clinicName = clinicSettings?.name || "Paw-M Clinic";
-      if (paymentStatus === "paid") {
+      if (paymentStatus === "paid" && existing.paymentStatus !== "paid") {
         sendMail(buildPaymentSuccessEmail({
           to: existing.email, customerName: updated.customerName, orderId: updated.id,
           amount: updated.total, method: updated.paymentMethod, clinicName,
@@ -379,8 +380,10 @@ router.patch("/:id/payment", authenticateUser, requireStaff, validate(updateOrde
       }
     }
     res.json(updated);
-  } catch {
-    res.status(404).json({ error: "Order not found" });
+  } catch (e) {
+    if (e?.status === 400) return res.status(400).json({ error: e.message });
+    log.error({ err: e }, "failed to update order payment status");
+    res.status(500).json({ error: "Failed to update order payment status" });
   }
 });
 

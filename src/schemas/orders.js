@@ -32,6 +32,16 @@ export const updateOrderPaymentSchema = z.object({
   params: z.object({ id: z.string() }),
   body: z.object({
     paymentStatus: z.enum(["unpaid", "proof_submitted", "paid"]),
+    paymentMethod: z.enum(["cash", "fawry", "instapay"]).optional(),
+  }),
+});
+
+export const submitPaymentProofSchema = z.object({
+  params: z.object({ id: z.string() }),
+  body: z.object({
+    paymentRef: z.string().max(120).optional().default(""),
+    proofImage: z.string().max(8_000_000).optional().default(""),
+    phone: z.string().max(40).optional(),
   }),
 });
 

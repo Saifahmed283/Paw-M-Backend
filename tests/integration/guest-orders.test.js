@@ -98,6 +98,67 @@ describe("Guest checkout (orders)", () => {
     );
   });
 
+  it("confirms and marks a cash sale paid on creation", async () => {
+    const res = await request(app).post("/orders").send(validOrderBody);
+    expect(res.status).toBe(201);
+    expect(mockPrisma.order.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "confirmed",
+          paymentStatus: "paid",
+        }),
+      }),
+    );
+    const orderData = mockPrisma.order.create.mock.calls[0][0].data;
+    expect(orderData.paidAt).toBeInstanceOf(Date);
+    expect(mockPrisma.payment.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "paid", kind: "order", orderId: "ORD-TEST1" }),
+      }),
+    );
+  });
+
+  it("puts InstaPay with proof under review and keeps the proof", async () => {
+    const res = await request(app)
+      .post("/orders")
+      .send({
+        ...validOrderBody,
+        paymentMethod: "instapay",
+        paymentRef: "TXN-77",
+        proofImage: "data:image/png;base64,AAAA",
+      });
+    expect(res.status).toBe(201);
+    const orderData = mockPrisma.order.create.mock.calls[0][0].data;
+    expect(orderData.paymentStatus).toBe("proof_submitted");
+    expect(orderData.status).toBe("pending");
+    expect(orderData.paymentRef).toBe("TXN-77");
+    expect(orderData.proofImage).toBe("data:image/png;base64,AAAA");
+    expect(mockPrisma.payment.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "proof_submitted", method: "instapay" }),
+      }),
+    );
+  });
+
+  it("keeps a customer-supplied Fawry voucher under review", async () => {
+    const res = await request(app)
+      .post("/orders")
+      .send({ ...validOrderBody, paymentMethod: "fawry", paymentRef: "FAW-999" });
+    expect(res.status).toBe(201);
+    const orderData = mockPrisma.order.create.mock.calls[0][0].data;
+    expect(orderData.paymentStatus).toBe("proof_submitted");
+    expect(orderData.paymentRef).toBe("FAW-999");
+    expect(orderData.proofImage).toBe("");
+  });
+
+  it("generates a Fawry reference only when the customer did not provide one", async () => {
+    const res = await request(app)
+      .post("/orders")
+      .send({ ...validOrderBody, paymentMethod: "fawry" });
+    expect(res.status).toBe(201);
+    expect(mockPrisma.order.create.mock.calls[0][0].data.paymentRef).toBe("PAW-ABC123");
+  });
+
   it("links an order to the signed-in client", async () => {
     const res = await request(app)
       .post("/orders")
@@ -116,6 +177,48 @@ describe("Guest checkout (orders)", () => {
       .send({ paymentRef: "TXN-1", phone: "01000000000" });
     expect(res.status).toBe(200);
     expect(mockPrisma.order.update).toHaveBeenCalled();
+  });
+
+  it("syncs the linked Finance row when proof is submitted", async () => {
+    mockPrisma.order.findUnique.mockResolvedValue(orderRecord());
+    mockPrisma.payment.findMany.mockResolvedValue([{ id: "pay-1" }]);
+    const res = await request(app)
+      .post("/orders/ORD-TEST1/payment-proof")
+      .send({ paymentRef: "TXN-1", phone: "01000000000" });
+    expect(res.status).toBe(200);
+    expect(mockPrisma.payment.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "pay-1" }, data: { status: "proof_submitted" } }),
+    );
+  });
+
+  it("syncs the linked Finance row and confirms the order when staff mark it paid", async () => {
+    mockPrisma.order.findUnique.mockResolvedValue(
+      orderRecord({ paymentStatus: "proof_submitted", status: "pending", proofImage: "data:image/png;base64,AAAA" }),
+    );
+    mockPrisma.payment.findMany.mockResolvedValue([{ id: "pay-1" }]);
+    const res = await request(app)
+      .patch("/orders/ORD-TEST1/payment")
+      .send({ paymentStatus: "paid" });
+    expect(res.status).toBe(200);
+    const orderUpdate = mockPrisma.order.update.mock.calls[0][0].data;
+    expect(orderUpdate.paymentStatus).toBe("paid");
+    expect(orderUpdate.status).toBe("confirmed");
+    expect(orderUpdate.paidAt).toBeInstanceOf(Date);
+    expect(mockPrisma.payment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "pay-1" },
+        data: expect.objectContaining({ status: "paid" }),
+      }),
+    );
+  });
+
+  it("refuses to mark an InstaPay order paid before proof is submitted", async () => {
+    mockPrisma.order.findUnique.mockResolvedValue(orderRecord({ paymentStatus: "unpaid" }));
+    const res = await request(app)
+      .patch("/orders/ORD-TEST1/payment")
+      .send({ paymentStatus: "paid" });
+    expect(res.status).toBe(400);
+    expect(mockPrisma.order.update).not.toHaveBeenCalled();
   });
 
   it("rejects guest proof with a mismatched phone", async () => {

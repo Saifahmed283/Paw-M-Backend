@@ -10,7 +10,7 @@ const order = {
   ],
   discountAmount: 70, // 10% of the 700 subtotal
   paymentMethod: "cash",
-  paymentStatus: "unpaid", // POS cash sales are stored unpaid — still refundable
+  paymentStatus: "paid", // POS cash sales are settled on the spot — still refundable
 };
 
 describe("computeRefundPlan", () => {
