@@ -4,6 +4,7 @@ const mockPrisma = {
   adminUser: {
     findFirst: vi.fn(),
     findUnique: vi.fn(),
+    findMany: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
     count: vi.fn(),

@@ -172,17 +172,27 @@ router.post("/logout", (_req, res) => {
 });
 
 // ---- Account management (admin only) ----
-const ACCOUNT_SELECT = { id: true, username: true, role: true, isActive: true, createdAt: true };
+const ACCOUNT_SELECT = {
+  id: true,
+  username: true,
+  role: true,
+  isActive: true,
+  createdAt: true,
+  employeeId: true,
+};
 
-async function countActiveAdmins(excludeId) {
-  return prisma.adminUser.count({
+async function countActiveAdmins(excludeId, client = prisma) {
+  return client.adminUser.count({
     where: { role: "admin", isActive: true, ...(excludeId ? { NOT: { id: excludeId } } : {}) },
   });
 }
 
-/** Employee records are linked to accounts by username -> email. */
-function findLinkedEmployee(username) {
-  return prisma.employee.findFirst({
+/**
+ * Legacy link rule used for accounts created before AdminUser.employeeId existed:
+ * username (e.g. "admin") -> Employee.email (e.g. "admin@pawclinicmadinaty.com").
+ */
+function findLinkedEmployee(username, client = prisma) {
+  return client.employee.findFirst({
     where: { OR: [{ email: username }, { email: { startsWith: `${username}@` } }] },
     select: { id: true, email: true },
   });
@@ -192,26 +202,40 @@ function defaultEmployeeEmail(username) {
   return `${username}@paw-m.local`;
 }
 
+function companionEmployeeData(username, role) {
+  return {
+    fullName: username,
+    email: defaultEmployeeEmail(username),
+    role: role === "admin" ? "admin" : role === "payroll" ? "payroll" : "staff",
+    isActive: true,
+    payRateType: "hourly",
+    hourlyRate: 0,
+    monthlySalary: 0,
+    roleHoursPerDay: 8,
+    commissionRates: {},
+  };
+}
+
+class EmployeeProvisioningError extends Error {
+  constructor(cause) {
+    super("Failed to provision employee for account", { cause });
+    this.name = "EmployeeProvisioningError";
+  }
+}
+
 /**
  * Every dashboard account needs a companion Employee record, otherwise check-in,
  * KPI, task and payroll lookups all fail with "No employee profile found".
- * Reuse an existing employee when one already matches the username.
+ * Accepts a Prisma transaction client so provisioning and account creation commit
+ * together; falls back to the global client for non-transactional callers.
+ * Reuses a legacy employee matched by username -> email when one exists.
  */
-async function ensureEmployeeForAccount(username, role) {
-  const linked = await findLinkedEmployee(username);
+async function ensureEmployeeForAccount(username, role, client = prisma) {
+  const db = client ?? prisma;
+  const linked = await findLinkedEmployee(username, db);
   if (linked) return linked.id;
-  const created = await prisma.employee.create({
-    data: {
-      fullName: username,
-      email: defaultEmployeeEmail(username),
-      role: role === "admin" ? "admin" : role === "payroll" ? "payroll" : "staff",
-      isActive: true,
-      payRateType: "hourly",
-      hourlyRate: 0,
-      monthlySalary: 0,
-      roleHoursPerDay: 8,
-      commissionRates: {},
-    },
+  const created = await db.employee.create({
+    data: companionEmployeeData(username, role),
     select: { id: true },
   });
   return created.id;
@@ -233,34 +257,49 @@ router.get("/accounts", authenticateUser, requireAdmin, async (_req, res) => {
 router.post("/accounts", authenticateUser, requireAdmin, validate(createAccountSchema), async (req, res) => {
   const { username, password, role } = req.validated.body;
   try {
-    const exists = await prisma.adminUser.findUnique({ where: { username } });
-    if (exists) return res.status(409).json({ error: `Username "${username}" already exists.` });
     const salt = bcrypt.genSaltSync(BCRYPT_ROUNDS);
     const hash = hashPassword(password, salt);
-    const user = await prisma.adminUser.create({
-      data: { username, salt, hash, role, isActive: true },
-      select: ACCOUNT_SELECT,
-    });
-    try {
-      const employeeId = await ensureEmployeeForAccount(username, role);
-      logAudit(
-        "create_account",
-        String(user.id),
-        `Account created: ${user.username} (${user.role}) linked to employee ${employeeId} by ${req.user.username}`,
-      );
-    } catch (employeeError) {
-      // Never leave an account that cannot check in. Roll back the account if
-      // companion employee provisioning fails.
-      try {
-        await prisma.adminUser.delete({ where: { id: user.id } });
-      } catch {
-        // Best-effort rollback; the original provisioning error is what matters.
+    // One transaction: either both the companion employee and the account exist,
+    // or neither does. No orphan account that cannot check in is ever committed.
+    const user = await prisma.$transaction(async (tx) => {
+      const exists = await tx.adminUser.findUnique({ where: { username } });
+      if (exists) {
+        const conflict = new Error(`Username "${username}" already exists.`);
+        conflict.code = "USERNAME_TAKEN";
+        throw conflict;
       }
-      log.error({ err: employeeError }, "failed to provision employee for new account");
-      return res.status(500).json({ error: "Failed to create employee profile for account" });
-    }
+      let employeeId;
+      try {
+        employeeId = await ensureEmployeeForAccount(username, role, tx);
+      } catch (employeeError) {
+        throw new EmployeeProvisioningError(employeeError);
+      }
+      return tx.adminUser.create({
+        data: { username, salt, hash, role, isActive: true, employeeId },
+        select: ACCOUNT_SELECT,
+      });
+    });
+    logAudit(
+      "create_account",
+      String(user.id),
+      `Account created: ${user.username} (${user.role}) linked to employee ${user.employeeId} by ${req.user.username}`,
+    );
     res.status(201).json(user);
   } catch (e) {
+    if (e.code === "USERNAME_TAKEN") {
+      return res.status(409).json({ error: e.message });
+    }
+    if (e instanceof EmployeeProvisioningError) {
+      log.error({ err: e.cause }, "failed to provision employee for new account");
+      return res.status(500).json({ error: "Failed to create employee profile for account" });
+    }
+    if (e.code === "P2002") {
+      const target = JSON.stringify(e.meta?.target ?? "");
+      if (target.includes("employeeId")) {
+        return res.status(409).json({ error: "That employee profile is already linked to another account." });
+      }
+      return res.status(409).json({ error: `Username "${username}" already exists.` });
+    }
     log.error({ err: e }, "failed to create account");
     res.status(500).json({ error: "Failed to create account" });
   }
@@ -283,10 +322,20 @@ router.patch(
           return res.status(400).json({ error: "Cannot demote the last active admin account." });
         }
       }
-      const user = await prisma.adminUser.update({
-        where: { id },
-        data: { role },
-        select: ACCOUNT_SELECT,
+      const user = await prisma.$transaction(async (tx) => {
+        const updated = await tx.adminUser.update({
+          where: { id },
+          data: { role },
+          select: ACCOUNT_SELECT,
+        });
+        // Use the explicit link when present; legacy unlinked accounts still
+        // resolve their employee by username until the backfill runs.
+        const employeeId =
+          target.employeeId ?? (await findLinkedEmployee(target.username, tx))?.id ?? null;
+        if (employeeId) {
+          await tx.employee.update({ where: { id: employeeId }, data: { role } });
+        }
+        return updated;
       });
       logAudit(
         "update_account_role",
@@ -326,15 +375,6 @@ router.patch(
       if (username && username !== target.username) {
         const taken = await prisma.adminUser.findUnique({ where: { username } });
         if (taken) return res.status(409).json({ error: `Username "${username}" already exists.` });
-        const collision = await prisma.employee.findFirst({
-          where: { email: defaultEmployeeEmail(username) },
-          select: { id: true },
-        });
-        if (collision) {
-          return res
-            .status(409)
-            .json({ error: "That username is already used by an employee profile." });
-        }
       }
 
       const data = {};
@@ -347,26 +387,20 @@ router.patch(
         data.hash = hashPassword(password, salt);
       }
 
-      const user = await prisma.adminUser.update({ where: { id }, data, select: ACCOUNT_SELECT });
-
-      // Keep the linked employee in sync so check-in/payroll continue to resolve
-      // the account after a username change.
-      if (data.username && data.username !== target.username) {
-        const linked = await findLinkedEmployee(target.username);
-        if (linked) {
-          await prisma.employee
-            .update({
-              where: { id: linked.id },
-              data: {
-                email: defaultEmployeeEmail(data.username),
-                fullName: linked.email === defaultEmployeeEmail(target.username)
-                  ? data.username
-                  : undefined,
-              },
-            })
-            .catch(() => {});
+      const user = await prisma.$transaction(async (tx) => {
+        const updated = await tx.adminUser.update({ where: { id }, data, select: ACCOUNT_SELECT });
+        // A username change does NOT rewrite the employee email: the explicit
+        // employeeId link keeps attribution working regardless of the username.
+        // Role changes still need the employee record in sync.
+        if (role !== undefined && role !== target.role) {
+          const employeeId =
+            target.employeeId ?? (await findLinkedEmployee(target.username, tx))?.id ?? null;
+          if (employeeId) {
+            await tx.employee.update({ where: { id: employeeId }, data: { role } });
+          }
         }
-      }
+        return updated;
+      });
 
       const parts = [];
       if (username !== undefined && username !== target.username) parts.push(`username -> ${username}`);

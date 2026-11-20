@@ -4,8 +4,18 @@ import { logger } from "./logger.js";
 
 const log = logger.child({ module: "utils" });
 
+const CLINIC_TIME_ZONE = "Africa/Cairo";
+
+/** Day key used by work sessions / work days / payments, in the clinic's local time. */
 export function todayStr(d = new Date()) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CLINIC_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const part = (type) => parts.find((p) => p.type === type)?.value;
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
 function cryptoRandomInt(max) {

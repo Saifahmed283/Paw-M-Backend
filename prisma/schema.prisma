@@ -128,13 +128,18 @@ model ClinicSettings {
 }
 
 model AdminUser {
-  id        Int        @id @default(autoincrement())
-  username  String     @unique
-  salt      String
-  hash      String
-  role      StaffRole  @default(staff)
-  isActive  Boolean    @default(true)
-  createdAt DateTime   @default(now())
+  id         Int        @id @default(autoincrement())
+  username   String     @unique
+  salt       String
+  hash       String
+  role       StaffRole  @default(staff)
+  isActive   Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+
+  // Explicit link to the Employee used for check-in / payroll attribution.
+  // Legacy accounts stay null until backfilled (username -> email lookup).
+  employeeId String?    @unique
+  employee   Employee?  @relation(fields: [employeeId], references: [id], onDelete: SetNull)
 }
 
 model ClientAccount {
@@ -216,6 +221,7 @@ model Employee {
   isActive        Boolean   @default(true)
 
 // Relations
+  adminAccount       AdminUser?
   tasks              AdminTask[]
   workSessions       WorkSession[]
   payrollRecords     PayrollRecord[]

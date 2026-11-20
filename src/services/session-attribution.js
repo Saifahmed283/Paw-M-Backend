@@ -15,22 +15,30 @@ const log = logger.child({ module: "session-attribution" });
  * This is intentionally non-blocking: any failure is logged and the sale is
  * still completed. It never gates the request.
  *
- * @param {object} req  Express request (used to read the admin session cookie).
+ * @param {object} req  Express request (uses req.user when set, else the admin session cookie).
  * @param {{ orders?: number, bookings?: number, revenue?: number, commission?: number }} delta
  */
 export async function attributeSaleToActiveSession(req, delta = {}) {
   try {
-    const token = req.cookies?.[config.cookieName];
-    if (!token) return null;
+    // Bearer-authenticated staff (authenticateClientOrStaff -> authenticateUser)
+    // already have their AdminUser id on req.user. Prefer it; only decode the
+    // staff cookie when no authenticated user is attached to the request.
+    let userId = req.user?.id;
+    if (userId == null) {
+      const token = req.cookies?.[config.cookieName];
+      if (!token) return null;
 
-    let decoded;
-    try {
-      decoded = jwt.verify(token, config.jwtSecret);
-    } catch {
-      return null; // not an admin session
+      let decoded;
+      try {
+        decoded = jwt.verify(token, config.jwtSecret);
+      } catch {
+        return null; // not an admin session
+      }
+      userId = decoded.id;
     }
+    if (userId == null) return null;
 
-    const employeeId = await resolveEmployeeId(decoded.id);
+    const employeeId = await resolveEmployeeId(userId);
     if (!employeeId) return null;
 
     const open = await prisma.workSession.findFirst({

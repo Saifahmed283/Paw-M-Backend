@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "prisma migrate deploy && node scripts/backfill-account-employees.js --apply && node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -13,6 +13,7 @@
     "db:seed": "node prisma/seed.js",
     "db:import-products": "node scripts/import-products.js",
     "db:import-products:apply": "node scripts/import-products.js --apply",
+    "db:backfill-account-employees": "node scripts/backfill-account-employees.js",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio"
   },
@@ -31,10 +32,10 @@
     "nodemailer": "^10.6.0",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
+    "prisma": "^6.12.0",
     "zod": "^4.6.6"
   },
   "devDependencies": {
-    "prisma": "^6.12.0",
     "supertest": "^7.2.2",
     "vitest": "^4.1.11"
   },
