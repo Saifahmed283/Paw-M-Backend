@@ -322,6 +322,9 @@ router.post("/:id/payment-proof", optionalClientOrStaff, transferLimiter, valida
   if (!paymentRef) {
     return res.status(400).json({ error: "A real transfer reference is required." });
   }
+  if (!proofImage) {
+    return res.status(400).json({ error: "A payment screenshot is required." });
+  }
   try {
     const order = await prisma.order.findUnique({ where: { id } });
     if (!order) return res.status(404).json({ error: "Order not found" });
@@ -333,6 +336,9 @@ router.post("/:id/payment-proof", optionalClientOrStaff, transferLimiter, valida
       body: {
         senderName: order.customerName,
         transferReference: paymentRef,
+        // The deprecated shim has no date field; use the actual submission
+        // time rather than inventing a transfer reference or timestamp claim.
+        transferredAt: new Date().toISOString(),
         evidenceBase64: proofImage,
         phone,
       },

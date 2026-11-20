@@ -269,7 +269,11 @@ describe("Trusted verification endpoints", () => {
     mockPrisma.order.findUnique.mockResolvedValue(orderRecord({ paymentMethod: "cash" }));
     const res = await request(app)
       .post("/orders/ORD-TEST1/transfer-submission")
-      .send({ senderName: "Guest Customer", transferReference: "TXN-123", phone: "01000000000" });
+      .send({
+        senderName: "Guest Customer", transferReference: "TXN-123", phone: "01000000000",
+        transferredAt: new Date().toISOString(),
+        evidenceBase64: "data:image/png;base64,AAAA",
+      });
     expect(res.status).toBe(400);
     expect(storeEvidence).not.toHaveBeenCalled();
   });
@@ -280,6 +284,7 @@ describe("Trusted verification endpoints", () => {
       .post("/orders/ORD-TEST1/transfer-submission")
       .send({
         senderName: "Guest Customer", transferReference: "TXN-123", phone: "01000000000",
+        transferredAt: "2026-11-20T10:30:00.000Z",
         evidenceBase64: "data:image/png;base64,AAAA",
       });
     expect(res.status).toBe(200);
@@ -288,9 +293,26 @@ describe("Trusted verification endpoints", () => {
     expect(storeEvidence).toHaveBeenCalled();
     expect(mockPrisma.paymentVerification.create.mock.calls[0][0].data).toMatchObject({
       source: "customer_transfer", decision: "submitted", customerRef: "TXN-123",
+      senderName: "Guest Customer",
+      transferredAt: new Date("2026-11-20T10:30:00.000Z"),
       evidenceKey: "payment-evidence/ORD-TEST1/abc.png", amount: 100,
     });
     expect(logAudit).toHaveBeenCalledWith("transfer_submitted", "ORD-TEST1", expect.any(String));
+  });
+
+  it("requires the transfer date and screenshot, not just a reference", async () => {
+    mockPrisma.order.findUnique.mockResolvedValue(orderRecord({ paymentMethod: "instapay" }));
+    const base = {
+      senderName: "Guest Customer", transferReference: "TXN-123", phone: "01000000000",
+    };
+    expect((await request(app).post("/orders/ORD-TEST1/transfer-submission").send(base)).status).toBe(400);
+    expect((await request(app).post("/orders/ORD-TEST1/transfer-submission").send({
+      ...base, transferredAt: "2026-11-20T10:30:00.000Z",
+    })).status).toBe(400);
+    expect((await request(app).post("/orders/ORD-TEST1/transfer-submission").send({
+      ...base, evidenceBase64: "data:image/png;base64,AAAA",
+    })).status).toBe(400);
+    expect(storeEvidence).not.toHaveBeenCalled();
   });
 
   it("enforces ownership for signed-in clients and guests", async () => {
@@ -298,19 +320,30 @@ describe("Trusted verification endpoints", () => {
     expect((await request(app)
       .post("/orders/ORD-TEST1/transfer-submission")
       .set("x-test-client", "1")
-      .send({ senderName: "Other Client", transferReference: "TXN-123" })).status).toBe(403);
+      .send({
+        senderName: "Other Client", transferReference: "TXN-123",
+        transferredAt: "2026-11-20T10:30:00.000Z",
+        evidenceBase64: "data:image/png;base64,AAAA",
+      })).status).toBe(403);
 
     mockPrisma.order.findUnique.mockResolvedValue(orderRecord());
     expect((await request(app)
       .post("/orders/ORD-TEST1/transfer-submission")
-      .send({ senderName: "Guest Customer", transferReference: "TXN-123", phone: "09999999999" })).status).toBe(403);
+      .send({
+        senderName: "Guest Customer", transferReference: "TXN-123", phone: "09999999999",
+        transferredAt: "2026-11-20T10:30:00.000Z",
+        evidenceBase64: "data:image/png;base64,AAAA",
+      })).status).toBe(403);
   });
 
   it("forwards the legacy payment-proof route into transfer submission without storing base64 on the order", async () => {
     mockPrisma.order.findUnique.mockResolvedValue(orderRecord({ paymentMethod: "instapay" }));
     const res = await request(app)
       .post("/orders/ORD-TEST1/payment-proof")
-      .send({ paymentRef: "TXN-LEGACY", phone: "01000000000" });
+      .send({
+        paymentRef: "TXN-LEGACY", phone: "01000000000",
+        proofImage: "data:image/png;base64,AAAA",
+      });
     expect(res.status).toBe(200);
     expect(res.body.id).toBe("pv-1");
     expect(mockPrisma.order.update.mock.calls[0][0].data).not.toHaveProperty("proofImage", expect.stringContaining("base64"));

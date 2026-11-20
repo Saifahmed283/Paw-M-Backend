@@ -231,7 +231,11 @@ describe("Admin verification decisions", () => {
 
     const resubmit = await request(app)
       .post("/orders/ORD-1/transfer-submission")
-      .send({ senderName: "Luna's Owner", transferReference: "TXN-456", phone: "01000000000" });
+      .send({
+        senderName: "Luna's Owner", transferReference: "TXN-456", phone: "01000000000",
+        transferredAt: "2026-11-20T10:30:00.000Z",
+        evidenceBase64: "data:image/png;base64,AAAA",
+      });
     expect(resubmit.status).toBe(200);
     expect(mockPrisma.paymentVerification.create).toHaveBeenCalledTimes(1);
   });
@@ -303,6 +307,7 @@ describe("Evidence cleanup on submission failure", () => {
       .post("/orders/ORD-1/transfer-submission")
       .send({
         senderName: "Luna's Owner", transferReference: "TXN-789", phone: "01000000000",
+        transferredAt: "2026-11-20T10:30:00.000Z",
         evidenceBase64: "data:image/png;base64,AAAA",
       });
     expect(res.status).toBe(500);

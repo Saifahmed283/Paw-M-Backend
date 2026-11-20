@@ -56,8 +56,14 @@ export const transferSubmissionSchema = z.object({
   body: z.object({
     senderName: z.string().min(2).max(120),
     transferReference: z.string().min(3).max(160),
-    transferredAt: z.string().datetime().optional(),
-    evidenceBase64: z.string().max(8_000_000).optional().default(""),
+    // All four proof fields are mandatory: staff match them to the bank
+    // statement, so a reference-only claim is not enough to review.
+    transferredAt: z.string().datetime(),
+    evidenceBase64: z
+      .string()
+      .min(1, "A payment screenshot is required.")
+      .max(8_000_000)
+      .refine((v) => v.startsWith("data:image/"), "A payment screenshot is required."),
     note: z.string().max(500).optional().default(""),
     // Guest ownership check (same rule as the legacy /payment-proof route).
     phone: z.string().max(40).optional(),

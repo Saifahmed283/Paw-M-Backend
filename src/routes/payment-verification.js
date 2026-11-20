@@ -171,10 +171,12 @@ export async function transferSubmissionHandler(req, res) {
     }
     assertSubmittable(existing, Boolean(req.user));
     assertOwnership(req, existing, body.phone);
-
-    if (body.evidenceBase64) {
-      evidenceKey = await storeEvidence(body.evidenceBase64, { orderId: id, kind: "transfer" });
+    if (!body.transferredAt || Number.isNaN(new Date(body.transferredAt).getTime())) {
+      throw fail(400, "A valid transfer date is required.");
     }
+    if (!body.evidenceBase64) throw fail(400, "A payment screenshot is required.");
+
+    evidenceKey = await storeEvidence(body.evidenceBase64, { orderId: id, kind: "transfer" });
 
     const verification = await prisma.$transaction(async (tx) => {
       await lockOrder(tx, id);

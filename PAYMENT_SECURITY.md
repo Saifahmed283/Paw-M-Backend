@@ -52,9 +52,11 @@ address is present.
   could settle the transfer portion without bank verification.
 - `POST /api/orders/:id/transfer-submission` (guest-capable) only records
   evidence and moves the order to `proof_submitted`; it never marks it paid.
-  The legacy `POST /api/orders/:id/payment-proof` is rate-limited, requires a
-  real customer-supplied transfer reference, and forwards to that flow; an
-  image-only request is rejected rather than receiving a generated reference.
+  All four proof fields — sender name, real transfer reference, transfer date
+  and a screenshot — are required so staff can match the claim to the bank
+  statement. The legacy `POST /api/orders/:id/payment-proof` is rate-limited,
+  requires the same real reference and a screenshot, and forwards to that flow;
+  an image-only request is rejected rather than receiving a generated reference.
 - `PATCH /api/orders/:id/payment` refuses `paid` with:
   `Use cash confirmation or transfer verification to mark an order paid.`
   It also refuses `fawry`.
