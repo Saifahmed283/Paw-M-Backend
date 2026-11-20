@@ -32,7 +32,9 @@ enum PaymentMethod {
 enum PaymentStatus {
   unpaid
   proof_submitted
+  under_review
   paid
+  rejected
 }
 
 enum StaffRole {
@@ -140,6 +142,9 @@ model AdminUser {
   // Legacy accounts stay null until backfilled (username -> email lookup).
   employeeId String?    @unique
   employee   Employee?  @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  paymentVerifications PaymentVerification[]
+  cashDrawerCloses     CashDrawerClose[]
 }
 
 model ClientAccount {
@@ -293,10 +298,54 @@ model Order {
   discountLabel  String       @default("")
   createdAt     DateTime      @default(now())
 
+  verifications PaymentVerification[]
+
   @@index([status])
   @@index([paymentStatus])
   @@index([archived])
   @@index([source])
+}
+
+/// Immutable audit trail of how an order payment was verified. Only trusted
+/// verification events (POS cash reception, staff cash confirmation, or admin
+/// transfer approval) may set an order's paymentStatus to "paid".
+model PaymentVerification {
+  id                       String        @id @default(cuid())
+  orderId                  String
+  order                    Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  paymentId                String?
+  method                   PaymentMethod
+  amount                   Float
+  source                   String // customer_transfer | cash_reception
+  customerRef              String        @default("")
+  senderName               String        @default("")
+  transferredAt            DateTime?
+  evidenceKey              String        @default("") // private object-storage key; never exposed to customers
+  note                     String        @default("")
+  decision                 String        @default("submitted") // submitted | under_review | approved | rejected | superseded
+  bankTransactionReference String?       @unique
+  reviewerId               Int?
+  reviewer                 AdminUser?    @relation(fields: [reviewerId], references: [id], onDelete: SetNull)
+  reviewedAt               DateTime?
+  createdAt                DateTime      @default(now())
+
+  @@index([orderId])
+  @@index([decision])
+}
+
+/// Per-day cash drawer reconciliation (expected vs counted).
+model CashDrawerClose {
+  id        String    @id @default(cuid())
+  date      String // YYYY-MM-DD (clinic day)
+  expected  Float
+  counted   Float
+  variance  Float
+  countedBy     Int
+  countedByUser AdminUser @relation(fields: [countedBy], references: [id])
+  note      String    @default("")
+  createdAt DateTime  @default(now())
+
+  @@index([date])
 }
 
 model Payment {

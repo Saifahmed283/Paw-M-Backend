@@ -80,6 +80,10 @@ router.post("/", authenticateUser, requireStaff, validate(createPaymentSchema), 
       if (!data.requestedBy) data.requestedBy = req.user?.username ?? "";
     }
 
+    if (data.kind === "order" && data.status === "paid") {
+      return res.status(400).json({ error: "Order payments are settled through verification only." });
+    }
+
     if (body.kind === "order" && data.orderId) {
       const order = await prisma.order.findUnique({ where: { id: data.orderId }, select: { id: true } });
       if (!order) return res.status(400).json({ error: "Order not found" });
@@ -138,6 +142,11 @@ router.patch("/:id", authenticateUser, requireStaff, validate(updatePaymentSchem
     const updated = await prisma.$transaction(async (tx) => {
       const existing = await tx.payment.findUnique({ where: { id } });
       if (!existing) return null;
+      // Order payments are mirrors of the Order row. Settling them here would
+      // bypass verification, even if the row is re-kinded in the same request.
+      if ((existing.kind === "order" || patch.kind === "order") && patch.status === "paid") {
+        throw Object.assign(new Error("Order payments are settled through verification only."), { status: 400 });
+      }
       if (patch.orderId && (patch.orderId !== existing.orderId || patch.kind === "order")) {
         const order = await tx.order.findUnique({ where: { id: patch.orderId }, select: { id: true } });
         if (!order) {
@@ -218,6 +227,11 @@ router.post("/:id/settle", authenticateUser, requireStaff, validate(settlePaymen
         include: { items: true },
       });
       if (!existing) return null;
+      if (existing.kind === "order") {
+        const err = new Error("Order payments are settled through verification only.");
+        err.status = 400;
+        throw err;
+      }
       if (existing.status === "paid") {
         const err = new Error("Payment is already settled");
         err.status = 400;

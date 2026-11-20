@@ -1,24 +1,38 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { prisma } from "../lib/prisma.js";
-import { logAudit, nextId, fawryReference } from "../lib/utils.js";
-import { validateProofImage } from "../services/orders.js";
+import { logAudit, nextId, todayStr } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
-import { authenticateUser, requireStaff, authenticateClient, authenticateClientOrStaff, optionalClientOrStaff } from "../middleware/auth.js";
+import { authenticateUser, requireStaff, optionalClientOrStaff } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { createOrderSchema, updateOrderStatusSchema, updateOrderPaymentSchema, submitPaymentProofSchema, refundOrderSchema } from "../schemas/orders.js";
+import {
+  createOrderSchema,
+  updateOrderStatusSchema,
+  updateOrderPaymentSchema,
+  submitPaymentProofSchema,
+  refundOrderSchema,
+  confirmCashSchema,
+  transferSubmissionSchema,
+} from "../schemas/orders.js";
 import { createOrderTransactional, restoreStockOnCancel, computeRefundPlan } from "../services/orders.js";
 import { syncOrderPaymentStatus } from "../services/payment-status.js";
+import { confirmCashHandler, transferSubmissionHandler } from "./payment-verification.js";
 import { createBroadcastNotification } from "../lib/notify.js";
 import { attributeSaleToActiveSession } from "../services/session-attribution.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/orders" });
-const localDate = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
 
+// Eight attempts per quarter hour per client, independent of the broad /api/orders
+// limiter. Overridable in tests via TRANSFER_SUBMISSION_RATE_MAX.
+const transferLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: () => Number(process.env.TRANSFER_SUBMISSION_RATE_MAX ?? 8) || 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many transfer submissions. Try again in 15 minutes." },
+});
 router.get("/", authenticateUser, requireStaff, async (req, res) => {
   try {
     const p = parsePagination(req.query);
@@ -51,27 +65,33 @@ router.get("/track", async (req, res) => {
 router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req, res) => {
   const body = req.validated.body;
   const paymentMethod = body.paymentMethod;
+  // A store customer may claim source:"pos" but never gains POS privileges.
+  const isPos = Boolean(req.user) && body.source === "pos";
+  if (body.cashReceived && !isPos) {
+    return res.status(400).json({ error: "Cash reception may only be declared by authenticated POS staff." });
+  }
+  if (body.cashReceived && paymentMethod !== "cash") {
+    return res.status(400).json({ error: "Cash reception is only valid for cash orders." });
+  }
   try {
-    const proofImage = body.proofImage || "";
-    if (proofImage.length > 0) {
-      const check = validateProofImage(proofImage);
-      if (!check.valid) return res.status(400).json({ error: check.error });
-    }
-
     const created = await prisma.$transaction(
       async (tx) => {
-        // Price overrides / discounts for POS sales are only trusted when the
-        // request is authenticated as staff (req.user). A store customer may
-        // send source:"pos" but never gains override powers.
-        const isPos = Boolean(req.user) && body.source === "pos";
         const { total, lines, discountAmount, discountLabel } = await createOrderTransactional(tx, body, isPos);
-        const proofRef = (body.paymentRef || "").trim();
-        const isCash = paymentMethod === "cash";
-        const needsProof = paymentMethod === "instapay" || paymentMethod === "fawry";
-        const hasProof = Boolean(proofRef) || Boolean(proofImage);
-        // Cash is settled on the spot. InstaPay/Fawry are only done after staff
-        // reviews the submitted proof; with proof attached they enter review.
-        const paymentStatus = isCash ? "paid" : needsProof && hasProof ? "proof_submitted" : "unpaid";
+        if (
+          body.cashReceived &&
+          Math.abs(Number(body.cashReceivedAmount ?? 0) - total) > 0.01
+        ) {
+          throw Object.assign(new Error("Cash received must match the order total."), { status: 400 });
+        }
+        // The ONLY trusted paid-at-checkout path: staff + POS + cash + exact
+        // tendered amount. Every other order starts unpaid and is settled later
+        // by confirm-cash or transfer approval.
+        const posCashConfirmed = isPos &&
+          paymentMethod === "cash" &&
+          body.cashReceived === true &&
+          Math.abs(Number(body.cashReceivedAmount ?? 0) - total) <= 0.01;
+        const now = new Date();
+        const paymentStatus = posCashConfirmed ? "paid" : "unpaid";
 
         const order = await tx.order.create({
           data: {
@@ -83,24 +103,36 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
             address: body.address,
             items: lines,
             total,
-            status: isCash ? "confirmed" : "pending",
+            status: posCashConfirmed ? "confirmed" : "pending",
             paymentMethod,
             paymentStatus,
-            paidAt: isCash ? new Date() : null,
-            // Keep a customer-supplied Fawry voucher; generate a reference only
-            // when they have not provided one (the old flow discarded both the
-            // ref and the proof image for Fawry).
-            paymentRef: paymentMethod === "fawry" && !proofRef ? fawryReference() : proofRef.slice(0, 120),
-            proofImage: needsProof ? proofImage.slice(0, 8_000_000) : "",
+            paidAt: posCashConfirmed ? now : null,
+            paymentRef: "",
+            proofImage: "",
             source: isPos ? "pos" : "store",
             discountAmount,
             discountLabel,
           },
         });
 
+        if (posCashConfirmed) {
+          await tx.paymentVerification.create({
+            data: {
+              orderId: order.id,
+              method: "cash",
+              amount: total,
+              source: "cash_reception",
+              decision: "approved",
+              reviewerId: req.user.id,
+              reviewedAt: now,
+              createdAt: now,
+              note: "Cash received at POS checkout",
+            },
+          });
+        }
+
         // Every sale produces a categorized Payment row so Finance collects from
-        // one source of truth. Cash is already paid; other methods are pending
-        // and become paid when staff confirm them.
+        // one source of truth. Its status mirrors the order's verification state.
         const paymentItems = lines.map((line) => ({
           label: `${line.qty}x ${line.name}`.slice(0, 200),
           amount: Math.round(line.price * line.qty * 100) / 100,
@@ -122,7 +154,7 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
             amount: total,
             method: paymentMethod,
             status: paymentStatus,
-            date: localDate(),
+            date: todayStr(),
             notes: isPos ? "Point of sale" : "Store checkout",
             orderId: order.id,
             kind: "order",
@@ -135,6 +167,9 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
       },
       { timeout: 15000 }
     );
+    if (created.paymentStatus === "paid") {
+      logAudit("cash_received_pos", created.id, `POS cash EGP ${created.total} received by staff #${req.user.id}`);
+    }
     createBroadcastNotification(prisma, {
       type: "order",
       title: "New order received",
@@ -142,7 +177,8 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
       data: { orderId: created.id },
     }).catch(() => {});
 
-    // Confirm the order immediately (not just on later staff status changes).
+    // Order-placed mail never claims payment was received: every checkout is
+    // pending until cash is confirmed or a transfer is verified.
     if (created.email) {
       import("../lib/email.js").then(async ({ sendMail, buildOrderPlacedEmail }) => {
         const clinicSettings = await prisma.clinicSettings.findUnique({ where: { id: 1 } }).catch(() => null);
@@ -153,7 +189,6 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
           orderId: created.id,
           total: created.total,
           paymentMethod: created.paymentMethod,
-          paymentRef: created.paymentMethod !== "cash" ? created.paymentRef : "",
           clinicName,
         }));
       }).catch(() => {});
@@ -199,7 +234,7 @@ router.post("/:id/refund", authenticateUser, requireStaff, validate(refundOrderS
             amount: -refundPlan.refundedAmount,
             method: order.paymentMethod,
             status: "paid",
-            date: localDate(),
+            date: todayStr(),
             notes: reason,
             orderId: order.id,
             kind: "refund",
@@ -272,62 +307,39 @@ router.post("/:id/refund", authenticateUser, requireStaff, validate(refundOrderS
   }
 });
 
-router.post("/:id/payment-proof", optionalClientOrStaff, validate(submitPaymentProofSchema), async (req, res) => {
+// ── Trusted verification entry points ────────────────────────────────────────
+// Only these two handlers (plus POS cash reception above) may settle an order.
+router.post("/:id/confirm-cash", authenticateUser, requireStaff, validate(confirmCashSchema), confirmCashHandler);
+router.post("/:id/transfer-submission", optionalClientOrStaff, transferLimiter, validate(transferSubmissionSchema), transferSubmissionHandler);
+
+// Deprecated compatibility shim: forwards to the transfer-submission flow.
+// Cash orders are rejected; the image is stored privately, never on the Order.
+router.post("/:id/payment-proof", optionalClientOrStaff, transferLimiter, validate(submitPaymentProofSchema), async (req, res) => {
   const { id } = req.validated.params;
-  const { paymentRef: rawRef, proofImage: rawImage, phone } = req.validated.body;
-  const paymentRef = rawRef.trim();
-  const proofImage = rawImage.trim();
-  if (!paymentRef && !proofImage) {
-    return res.status(400).json({ error: "Provide a transaction reference or a proof image." });
-  }
-  if (proofImage.length > 0) {
-    const check = validateProofImage(proofImage);
-    if (!check.valid) return res.status(400).json({ error: check.error });
+  const { paymentRef, proofImage, phone } = req.validated.body;
+  // A proof image alone is not a payment claim: the reviewer matches a real
+  // reference against the bank statement, so never invent one.
+  if (!paymentRef) {
+    return res.status(400).json({ error: "A real transfer reference is required." });
   }
   try {
-    const existing = await prisma.order.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: "Order not found" });
-    if (existing.paymentStatus === "paid") {
-      return res.status(400).json({ error: "This order is already marked as paid." });
+    const order = await prisma.order.findUnique({ where: { id } });
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (order.paymentMethod !== "instapay") {
+      return res.status(400).json({ error: "Only InstaPay orders accept transfer submissions." });
     }
-    if (existing.paymentMethod === "cash") {
-      return res.status(400).json({ error: "Cash orders are paid at checkout — no proof is needed." });
-    }
-    if (existing.paymentStatus === "proof_submitted" && !req.user) {
-      return res.status(409).json({ error: "Proof is already under review." });
-    }
-
-    // Staff may act on any order. A signed-in client must own the order. A
-    // guest proves ownership the same way as the public tracker: order id +
-    // phone. This keeps the customer-facing proof flow working without
-    // exposing other customers' orders.
-    if (!req.user && req.client && existing.clientId !== req.client.id) {
-      return res.status(403).json({ error: "You can only submit proof for your own order." });
-    }
-    if (!req.user && !req.client) {
-      if (!phone || String(phone).trim() !== existing.phone) {
-        return res.status(403).json({ error: "Phone number does not match this order." });
-      }
-    }
-
-    const updated = await prisma.$transaction(async (tx) => {
-      const order = await tx.order.update({
-        where: { id },
-        data: {
-          paymentRef: paymentRef || existing.paymentRef,
-          proofImage: proofImage || existing.proofImage,
-          paymentStatus: "proof_submitted",
-        },
-      });
-      await syncOrderPaymentStatus(tx, order, "proof_submitted");
-      return order;
-    }, { timeout: 15000 });
-    logAudit("order_proof", id, `Payment proof submitted for ${updated.customerName}'s order`);
-    res.json(updated);
+    req.validated = {
+      params: { id },
+      body: {
+        senderName: order.customerName,
+        transferReference: paymentRef,
+        evidenceBase64: proofImage,
+        phone,
+      },
+    };
+    return transferSubmissionHandler(req, res);
   } catch (e) {
-    if (e?.status === 400) return res.status(400).json({ error: e.message });
-    log.error({ err: e }, "failed to submit payment proof");
-    res.status(500).json({ error: "Failed to submit payment proof" });
+    return res.status(e?.status ?? 500).json({ error: e?.message ?? "Failed to submit transfer details" });
   }
 });
 
@@ -335,16 +347,17 @@ router.patch("/:id/payment", authenticateUser, requireStaff, validate(updateOrde
   const { id } = req.validated.params;
   const { paymentStatus, paymentMethod } = req.validated.body;
   try {
+    // Defense in depth: the schema accepts "paid" only so this route can give
+    // clients an actionable error instead of a generic validation failure.
+    if (paymentStatus === "paid") {
+      return res.status(400).json({
+        error: "Use cash confirmation or transfer verification to mark an order paid.",
+      });
+    }
     const existing = await prisma.order.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: "Order not found" });
-    if (paymentStatus === "paid") {
-      if (existing.status === "cancelled") {
-        return res.status(400).json({ error: "A cancelled order cannot be marked as paid." });
-      }
-      // InstaPay/Fawry must carry proof before staff can finish verification.
-      if (existing.paymentMethod !== "cash" && existing.paymentStatus === "unpaid" && !existing.paymentRef && !existing.proofImage) {
-        return res.status(400).json({ error: "Payment proof has not been submitted yet." });
-      }
+    if (paymentMethod === "fawry") {
+      return res.status(400).json({ error: "Fawry is not available." });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -353,8 +366,7 @@ router.patch("/:id/payment", authenticateUser, requireStaff, validate(updateOrde
         data: {
           paymentStatus,
           ...(paymentMethod ? { paymentMethod } : {}),
-          paidAt: paymentStatus === "paid" ? (existing.paidAt ?? new Date()) : null,
-          ...(paymentStatus === "paid" && existing.status === "pending" ? { status: "confirmed" } : {}),
+          paidAt: null,
         },
       });
       await syncOrderPaymentStatus(tx, order, paymentStatus, { method: order.paymentMethod });
@@ -362,22 +374,17 @@ router.patch("/:id/payment", authenticateUser, requireStaff, validate(updateOrde
     }, { timeout: 15000 });
     logAudit("order_payment", id, `Order ${updated.customerName} marked ${paymentStatus} (${updated.paymentMethod})`);
 
-    const { sendMail, buildPaymentSuccessEmail, buildPaymentFailedEmail } = await import("../lib/email.js");
-    if (existing.email) {
+    // Only rejection-style edits notify the customer; any "success" mail must
+    // come from a verification event, never from a generic status patch.
+    if (existing.email && paymentStatus === "rejected") {
+      const { sendMail, buildPaymentFailedEmail } = await import("../lib/email.js");
       const clinicSettings = await prisma.clinicSettings.findUnique({ where: { id: 1 } }).catch(() => null);
       const clinicName = clinicSettings?.name || "Paw-M Clinic";
-      if (paymentStatus === "paid" && existing.paymentStatus !== "paid") {
-        sendMail(buildPaymentSuccessEmail({
-          to: existing.email, customerName: updated.customerName, orderId: updated.id,
-          amount: updated.total, method: updated.paymentMethod, clinicName,
-        })).catch(() => {});
-      } else if (paymentStatus === "unpaid" && existing.paymentStatus === "proof_submitted") {
-        sendMail(buildPaymentFailedEmail({
-          to: existing.email, customerName: updated.customerName, orderId: updated.id,
-          method: updated.paymentMethod, clinicName,
-          reason: "Payment proof was not accepted or payment could not be verified.",
-        })).catch(() => {});
-      }
+      sendMail(buildPaymentFailedEmail({
+        to: existing.email, customerName: updated.customerName, orderId: updated.id,
+        method: updated.paymentMethod, clinicName,
+        reason: "Payment proof was not accepted or payment could not be verified.",
+      })).catch(() => {});
     }
     res.json(updated);
   } catch (e) {
@@ -393,11 +400,25 @@ router.patch("/:id/status", authenticateUser, requireStaff, validate(updateOrder
   try {
     const existing = await prisma.order.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: "Order not found" });
+    // Cancellation is always allowed; completion is a financial state change.
+    if (status === "completed" && existing.paymentStatus !== "paid") {
+      return res.status(400).json({ error: "Payment must be verified before completing an order." });
+    }
 
     const updated = await prisma.$transaction(
       async (tx) => {
-        if (status === "cancelled" && existing.status !== "cancelled") {
-          await restoreStockOnCancel(tx, existing.items);
+        if (typeof tx.$queryRaw === "function") {
+          await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE`;
+        }
+        const fresh = await tx.order.findUnique({ where: { id } });
+        if (!fresh) throw Object.assign(new Error("Order not found"), { status: 404 });
+        // Re-check under the row lock: a concurrent edit cannot flip payment
+        // status between the early validation and this write.
+        if (status === "completed" && fresh.paymentStatus !== "paid") {
+          throw Object.assign(new Error("Payment must be verified before completing an order."), { status: 400 });
+        }
+        if (status === "cancelled" && fresh.status !== "cancelled") {
+          await restoreStockOnCancel(tx, fresh.items);
         }
         return tx.order.update({ where: { id }, data: { status } });
       },
@@ -416,7 +437,7 @@ router.patch("/:id/status", authenticateUser, requireStaff, validate(updateOrder
     }
     res.json(updated);
   } catch (e) {
-    if (e?.status === 400 || e?.status === 409) {
+    if (e?.status === 400 || e?.status === 404 || e?.status === 409) {
       return res.status(e.status).json({ error: e.message });
     }
     log.error({ err: e }, "failed to update order status");

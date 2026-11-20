@@ -53,6 +53,11 @@ export async function syncOrderPaymentStatus(db, order, status, options = {}) {
 /** Payment is edited directly in Finance; the Order mirrors it. */
 export async function syncPaymentToOrder(db, payment) {
   if (!payment?.orderId || payment.kind !== "order") return null;
+  // Hard stop: no Finance edit may settle an order. Only confirm-cash, POS cash
+  // reception and admin transfer approval may write paymentStatus:"paid".
+  if (payment.status === "paid") {
+    throw Object.assign(new Error("Order payments are settled through verification only."), { status: 400 });
+  }
   const order = await db.order.findUnique({ where: { id: payment.orderId } });
   if (!order) return null;
   const methodChanged = Boolean(payment.method) && order.paymentMethod !== payment.method;

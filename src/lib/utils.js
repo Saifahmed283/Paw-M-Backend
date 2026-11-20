@@ -93,7 +93,7 @@ export async function archiveFinishedDayRecords() {
 export const VALID_STATUSES = ["pending", "confirmed", "completed", "cancelled"];
 export const VALID_ORDER_STATUSES = ["pending", "confirmed", "completed", "cancelled"];
 export const VALID_PAYMENT_METHODS = ["cash", "fawry", "instapay"];
-export const VALID_PAYMENT_STATUSES = ["unpaid", "proof_submitted", "paid"];
+export const VALID_PAYMENT_STATUSES = ["unpaid", "proof_submitted", "under_review", "paid", "rejected"];
 export const VALID_PET_TYPES = ["dog", "cat", "both"];
 
 export function sanitizePetType(value) {

@@ -312,25 +312,28 @@ export function buildOrderStatusEmail({ to, customerName, orderId, status, clini
   });
 }
 
-export function buildOrderPlacedEmail({ to, customerName, orderId, total, paymentMethod, paymentRef, clinicName }) {
+export function buildOrderPlacedEmail({ to, customerName, orderId, total, paymentMethod, clinicName }) {
   const clinic = escapeHtml(clinicName);
   const methodLabels = { cash: "Cash", fawry: "Fawry", instapay: "InstaPay" };
   const method = escapeHtml(methodLabels[paymentMethod] || paymentMethod || "Cash");
-  const refRows = paymentRef ? [{ label: "Payment Reference", value: paymentRef, accent: C_AMBER }] : [];
+  const pendingNote = paymentMethod === "cash"
+    ? "Payment is pending: please pay in cash when you collect your order."
+    : paymentMethod === "instapay"
+      ? "Payment is pending verification: complete your InstaPay transfer and submit your transfer details to confirm it."
+      : "Payment is pending verification. No payment has been received yet.";
   return buildMail({
     to,
     clinicName,
     subject: `Order ${escapeHtml(orderId)} received — ${clinic}`,
     preheader: `Thanks ${customerName}! We've received your order ${orderId}.`,
     heading: "Order Received",
-    message: `Hi <strong>${escapeHtml(customerName)}</strong>,<br/>Thank you for your order. We've received it and will be in touch about the next steps.`,
+    message: `Hi <strong>${escapeHtml(customerName)}</strong>,<br/>Thank you for your order. We've received it and will be in touch about the next steps. Payment is not confirmed yet.`,
     details: [
       { label: "Order ID", value: orderId, accent: C_AMBER },
       { label: "Total", value: total, accent: C_AMBER },
       { label: "Payment Method", value: method, accent: C_AMBER },
-      ...refRows,
     ],
-    notes: "You can check your order status any time on the order tracking page.",
+    notes: `${pendingNote} You can check your order status any time on the order tracking page.`,
     button: { label: "Track Your Order", url: `${config.frontendUrl}/store/track` },
   });
 }

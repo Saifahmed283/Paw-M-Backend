@@ -24,6 +24,8 @@ const mockPrisma = {
     findFirst: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    updateMany: vi.fn(),
+    count: vi.fn(),
     delete: vi.fn(),
   },
   product: {
@@ -40,6 +42,24 @@ const mockPrisma = {
     create: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
+  },
+  paymentVerification: {
+    findMany: vi.fn(),
+    findFirst: vi.fn(),
+    findUnique: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    updateMany: vi.fn(),
+    count: vi.fn(),
+    aggregate: vi.fn(),
+    delete: vi.fn(),
+  },
+  cashDrawerClose: {
+    findMany: vi.fn(),
+    findFirst: vi.fn(),
+    findUnique: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
   },
   employee: {
     findMany: vi.fn(),
