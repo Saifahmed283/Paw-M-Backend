@@ -6,6 +6,8 @@ const mockPrisma = {
     findUnique: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    count: vi.fn(),
+    delete: vi.fn(),
   },
   booking: {
     findMany: vi.fn(),
@@ -56,12 +58,15 @@ const mockPrisma = {
     findUnique: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    count: vi.fn(),
+    delete: vi.fn(),
   },
   bonusDeductionRequest: {
     findMany: vi.fn(),
     findUnique: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    count: vi.fn(),
   },
   stockMovement: {
     findMany: vi.fn(),

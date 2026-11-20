@@ -5,9 +5,47 @@ export function calculateHours(startedAt, endedAt) {
   return (endedAt.getTime() - startedAt.getTime()) / (1000 * 60 * 60);
 }
 
-export function calculateBasePay(employee, hours, daysInPeriod) {
+/**
+ * Number of days in a month that yields the correct pro-rated salary when used
+ * as `monthlySalary / effectiveDaysInMonth * daysInPeriod`. For a single-month
+ * period this is just that month's length; for multi-month periods it is the
+ * length-weighted mean, so each calendar month is pro-rated correctly.
+ * Defaults to 30 for callers that do not supply a period.
+ */
+export function effectiveDaysInMonth(periodStart, periodEnd) {
+  if (!periodStart || !periodEnd) return 30;
+  const start = new Date(`${periodStart}T00:00:00Z`);
+  const end = new Date(`${periodEnd}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 30;
+
+  const daysInPeriod = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+  let fraction = 0;
+  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  while (cursor <= end) {
+    const year = cursor.getUTCFullYear();
+    const month = cursor.getUTCMonth();
+    const lastDay = new Date(Date.UTC(year, month + 1, 0));
+    const from = cursor < start ? start.getUTCDate() : 1;
+    const to = lastDay <= end ? lastDay.getUTCDate() : end.getUTCDate();
+    if (to >= from) fraction += (to - from + 1) / lastDay.getUTCDate();
+    cursor.setUTCMonth(month + 1);
+  }
+  return fraction > 0 ? daysInPeriod / fraction : 30;
+}
+
+export function calculateBasePay(employee, hours, daysInPeriod, daysInMonth = 30) {
   if (employee.payRateType === "monthly") {
-    return (employee.monthlySalary / 30) * daysInPeriod;
+    return (employee.monthlySalary / daysInMonth) * daysInPeriod;
+  }
+  return hours * employee.hourlyRate;
+}
+
+/** Base pay for a single session when no record-level total is supplied. */
+export function sessionBasePay(employee, hours, daysInMonth = 30) {
+  if (employee.payRateType === "monthly") {
+    const dailyRate = employee.monthlySalary / daysInMonth;
+    const hoursPerDay = Number(employee.roleHoursPerDay) > 0 ? Number(employee.roleHoursPerDay) : 8;
+    return dailyRate * Math.min(hours / hoursPerDay, 1);
   }
   return hours * employee.hourlyRate;
 }
@@ -101,9 +139,21 @@ export function calculateSessionTotals(sessions) {
   );
 }
 
-export function calculateBreakdown(sessions, employee) {
+export function calculateBreakdown(sessions, employee, options = {}) {
+  const daysInMonth = options.daysInMonth ?? 30;
+  const totalHours = sessions.reduce(
+    (sum, session) => sum + calculateHours(session.startedAt, session.endedAt),
+    0,
+  );
   return sessions.map((session) => {
     const hours = calculateHours(session.startedAt, session.endedAt);
+    // When the record's already-computed base pay is provided, distribute it
+    // across sessions by hours so the breakdown always reconciles with the
+    // record total — including for monthly-paid employees.
+    const basePay =
+      options.basePay !== undefined && totalHours > 0
+        ? options.basePay * (hours / totalHours)
+        : sessionBasePay(employee, hours, daysInMonth);
     return {
       sessionId: session.id,
       date: session.date,
@@ -111,7 +161,7 @@ export function calculateBreakdown(sessions, employee) {
       bookings: session.bookingsCount,
       orders: session.ordersCount,
       revenue: session.revenueTotal,
-      basePay: hours * employee.hourlyRate,
+      basePay: parseFloat(basePay.toFixed(2)),
       commission: commissionForEmployee(employee, session.revenueTotal),
     };
   });
@@ -127,6 +177,7 @@ export async function calculatePayrollForPeriod(periodStart, periodEnd) {
       hourlyRate: true,
       monthlySalary: true,
       payRateType: true,
+      roleHoursPerDay: true,
       commissionRates: true,
     },
   });
@@ -137,6 +188,7 @@ export async function calculatePayrollForPeriod(periodStart, periodEnd) {
   });
 
   const daysInPeriod = (new Date(periodEnd) - new Date(periodStart)) / (1000 * 60 * 60 * 24) + 1;
+  const daysInMonth = effectiveDaysInMonth(periodStart, periodEnd);
 
   // Widen the order window by one day on each side so orders created near the
   // period boundary still match a session timestamp; window matching keeps them
@@ -174,7 +226,7 @@ export async function calculatePayrollForPeriod(periodStart, periodEnd) {
     if (empSessions.length === 0) continue;
 
     const totals = calculateSessionTotals(empSessions);
-    const basePay = calculateBasePay(employee, totals.hours, daysInPeriod);
+    const basePay = calculateBasePay(employee, totals.hours, daysInPeriod, daysInMonth);
     const commissionPay = commissionForEmployee(employee, totals.revenue);
     const netPay = basePay + commissionPay;
 
@@ -193,7 +245,7 @@ export async function calculatePayrollForPeriod(periodStart, periodEnd) {
       totalDeductions: 0,
       netPay: parseFloat(netPay.toFixed(2)),
       status: "calculated",
-      breakdown: calculateBreakdown(empSessions, employee),
+      breakdown: calculateBreakdown(empSessions, employee, { daysInMonth, basePay }),
     });
   }
 

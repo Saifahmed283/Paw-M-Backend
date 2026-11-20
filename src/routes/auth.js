@@ -180,6 +180,43 @@ async function countActiveAdmins(excludeId) {
   });
 }
 
+/** Employee records are linked to accounts by username -> email. */
+function findLinkedEmployee(username) {
+  return prisma.employee.findFirst({
+    where: { OR: [{ email: username }, { email: { startsWith: `${username}@` } }] },
+    select: { id: true, email: true },
+  });
+}
+
+function defaultEmployeeEmail(username) {
+  return `${username}@paw-m.local`;
+}
+
+/**
+ * Every dashboard account needs a companion Employee record, otherwise check-in,
+ * KPI, task and payroll lookups all fail with "No employee profile found".
+ * Reuse an existing employee when one already matches the username.
+ */
+async function ensureEmployeeForAccount(username, role) {
+  const linked = await findLinkedEmployee(username);
+  if (linked) return linked.id;
+  const created = await prisma.employee.create({
+    data: {
+      fullName: username,
+      email: defaultEmployeeEmail(username),
+      role: role === "admin" ? "admin" : role === "payroll" ? "payroll" : "staff",
+      isActive: true,
+      payRateType: "hourly",
+      hourlyRate: 0,
+      monthlySalary: 0,
+      roleHoursPerDay: 8,
+      commissionRates: {},
+    },
+    select: { id: true },
+  });
+  return created.id;
+}
+
 router.get("/accounts", authenticateUser, requireAdmin, async (_req, res) => {
   try {
     const accounts = await prisma.adminUser.findMany({
@@ -204,11 +241,24 @@ router.post("/accounts", authenticateUser, requireAdmin, validate(createAccountS
       data: { username, salt, hash, role, isActive: true },
       select: ACCOUNT_SELECT,
     });
-    logAudit(
-      "create_account",
-      String(user.id),
-      `Account created: ${user.username} (${user.role}) by ${req.user.username}`,
-    );
+    try {
+      const employeeId = await ensureEmployeeForAccount(username, role);
+      logAudit(
+        "create_account",
+        String(user.id),
+        `Account created: ${user.username} (${user.role}) linked to employee ${employeeId} by ${req.user.username}`,
+      );
+    } catch (employeeError) {
+      // Never leave an account that cannot check in. Roll back the account if
+      // companion employee provisioning fails.
+      try {
+        await prisma.adminUser.delete({ where: { id: user.id } });
+      } catch {
+        // Best-effort rollback; the original provisioning error is what matters.
+      }
+      log.error({ err: employeeError }, "failed to provision employee for new account");
+      return res.status(500).json({ error: "Failed to create employee profile for account" });
+    }
     res.status(201).json(user);
   } catch (e) {
     log.error({ err: e }, "failed to create account");
@@ -276,6 +326,15 @@ router.patch(
       if (username && username !== target.username) {
         const taken = await prisma.adminUser.findUnique({ where: { username } });
         if (taken) return res.status(409).json({ error: `Username "${username}" already exists.` });
+        const collision = await prisma.employee.findFirst({
+          where: { email: defaultEmployeeEmail(username) },
+          select: { id: true },
+        });
+        if (collision) {
+          return res
+            .status(409)
+            .json({ error: "That username is already used by an employee profile." });
+        }
       }
 
       const data = {};
@@ -289,6 +348,26 @@ router.patch(
       }
 
       const user = await prisma.adminUser.update({ where: { id }, data, select: ACCOUNT_SELECT });
+
+      // Keep the linked employee in sync so check-in/payroll continue to resolve
+      // the account after a username change.
+      if (data.username && data.username !== target.username) {
+        const linked = await findLinkedEmployee(target.username);
+        if (linked) {
+          await prisma.employee
+            .update({
+              where: { id: linked.id },
+              data: {
+                email: defaultEmployeeEmail(data.username),
+                fullName: linked.email === defaultEmployeeEmail(target.username)
+                  ? data.username
+                  : undefined,
+              },
+            })
+            .catch(() => {});
+        }
+      }
+
       const parts = [];
       if (username !== undefined && username !== target.username) parts.push(`username -> ${username}`);
       if (role !== undefined && role !== target.role) parts.push(`role ${target.role} -> ${role}`);
