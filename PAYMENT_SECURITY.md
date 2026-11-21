@@ -8,7 +8,7 @@ never proof of payment.
 
 > Only three code paths may write `Order.paymentStatus = "paid"`:
 > authenticated POS cash reception, authenticated staff cash confirmation, and
-> admin approval of an InstaPay transfer.
+> admin approval of submitted Fawry or InstaPay payment proof.
 
 All other APIs either reject `paid` outright or write only non-settling states:
 `unpaid`, `proof_submitted`, `under_review`, or `rejected`. The Finance
@@ -20,9 +20,9 @@ from the outside.
 | State | Meaning | Written by |
 | --- | --- | --- |
 | `unpaid` | No accepted proof yet (also used after rejection) | checkout, cash-drawer flows, rejection |
-| `proof_submitted` | Customer supplied transfer details; awaiting review | transfer submission |
+| `proof_submitted` | Customer supplied Fawry receipt or InstaPay transfer details; awaiting review | proof submission |
 | `under_review` | Reserved for a reviewer workflow | verification APIs |
-| `paid` | Cash counted or transfer matched to a bank reference | trusted verification events only |
+| `paid` | Cash counted or proof matched to a reference | trusted verification events only |
 | `rejected` | Verification failed; customer may resubmit | admin rejection / generic rejection patch |
 
 `PaymentVerification.decision` is stored as text: `submitted`, `under_review`,
@@ -35,7 +35,7 @@ verifications for the same order.
 | --- | --- | --- | --- | --- |
 | POS cash reception | `POST /api/orders` with `source:"pos"` | staff session | `cashReceived:true` and `cashReceivedAmount` equal to the order total | creates an approved `cash_reception` verification, sets `paid`, `paidAt`, and order `confirmed` |
 | Staff cash confirmation | `POST /api/orders/:id/confirm-cash` | staff session | `amountReceived` exactly matching the order total | creates an approved `cash_reception` verification, sets `paid`, `paidAt`, and `confirmed` for pending orders |
-| Admin transfer approval | `POST /api/payment-verification/admin/:verificationId/approve` | admin staff session | `bankTransactionReference` (unique) | marks the verification `approved`, sets `paid`, `paidAt`, `paymentRef`, and `confirmed` for pending orders |
+| Admin proof approval | `POST /api/payment-verification/admin/:verificationId/approve` | admin staff session | `bankTransactionReference` (unique) | marks the verification `approved`, sets `paid`, `paidAt`, `paymentRef`, and `confirmed` for pending orders |
 
 Every path runs in a database transaction, locks the order/verification row
 with `FOR UPDATE`, records reviewer ID/time, writes an audit log entry, syncs
@@ -44,22 +44,23 @@ address is present.
 
 ## Closed settlement holes
 
-- Checkout schema is strict: `paymentRef`, `proofImage`, `fawry`, and
-  client-supplied `cashReceived` are rejected. Every non-POS order starts
-  `unpaid` / `pending` with empty `paymentRef` and `proofImage`.
-- Each order uses exactly one trusted settlement path. Mixed cash + InstaPay
+- Checkout schema is strict: `paymentRef`, `proofImage`, and client-supplied
+  `cashReceived` are rejected. Accepted methods are `cash`, `fawry` and
+  `instapay`; every non-POS order starts `unpaid` / `pending` with empty
+  `paymentRef` and `proofImage`.
+- Each order uses exactly one trusted settlement path. Mixed cash + Fawry/InstaPay
   splits are rejected by the POS UI and backend; otherwise a cash attestation
-  could settle the transfer portion without bank verification.
-- `POST /api/orders/:id/transfer-submission` (guest-capable) only records
-  evidence and moves the order to `proof_submitted`; it never marks it paid.
-  All four proof fields — sender name, real transfer reference, transfer date
-  and a screenshot — are required so staff can match the claim to the bank
-  statement. The legacy `POST /api/orders/:id/payment-proof` is rate-limited,
-  requires the same real reference and a screenshot, and forwards to that flow;
-  an image-only request is rejected rather than receiving a generated reference.
+  could settle the proof portion without independent verification.
+- `POST /api/orders/:id/transfer-submission` (guest-capable) accepts Fawry and
+  InstaPay orders, only records evidence and moves the order to
+  `proof_submitted`; it never marks it paid. All four proof fields — sender
+  name, real payment reference, payment date and a screenshot — are required so
+  staff can match the claim to their records. The legacy
+  `POST /api/orders/:id/payment-proof` is rate-limited, requires the same real
+  reference and a screenshot, and forwards to that flow; an image-only request
+  is rejected rather than receiving a generated reference.
 - `PATCH /api/orders/:id/payment` refuses `paid` with:
   `Use cash confirmation or transfer verification to mark an order paid.`
-  It also refuses `fawry`.
 - `PATCH /api/orders/:id/status` refuses `completed` until payment is paid:
   `Payment must be verified before completing an order.`
 - Finance APIs (`PATCH /api/payments/:id`, `POST /api/payments/:id/settle`,
@@ -67,9 +68,10 @@ address is present.
   `Order payments are settled through verification only.`
   `syncPaymentToOrder` also throws if a Finance edit tries to push `paid` back
   onto an order.
-- `fawry` remains in the Prisma enum and legacy Finance method lists for data
-  compatibility, but no order API accepts it and no Fawry reference is
-  generated. The unused `fawryReference()` helper is not called by checkout.
+- `fawry` is a real checkout method and settles through proof verification, just
+  like InstaPay. No Fawry reference is generated by checkout: the customer pays
+  with the order reference at an outlet and submits the receipt as evidence.
+  The unused `fawryReference()` helper is still not called by checkout.
 
 ## Transfer evidence
 
@@ -99,8 +101,8 @@ on a best-effort basis.
 | `GET /api/payment-verification/admin/cash-drawer?date=YYYY-MM-DD` | staff | Show the latest close, recomputed expected physical-cash total, and approved cash receptions |
 
 The drawer aggregates only verifications with `source:"cash_reception"`.
-Approved InstaPay transfers settle orders but are bank deposits, not cash in
-the till, so they are excluded from expected cash and variance.
+Approved Fawry and InstaPay proof settles orders but is not cash in the till,
+so it is excluded from expected cash and variance.
 
 Client session tokens are explicitly rejected from the admin surface with
 `403 Forbidden — staff access only`; missing tokens still yield `401`.

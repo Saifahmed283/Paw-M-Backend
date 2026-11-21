@@ -320,7 +320,9 @@ export function buildOrderPlacedEmail({ to, customerName, orderId, total, paymen
     ? "Payment is pending: please pay in cash when you collect your order."
     : paymentMethod === "instapay"
       ? "Payment is pending verification: complete your InstaPay transfer and submit your transfer details to confirm it."
-      : "Payment is pending verification. No payment has been received yet.";
+      : paymentMethod === "fawry"
+        ? "Payment is pending verification: pay at any Fawry outlet with your reference, then send the receipt on the tracking page."
+        : "Payment is pending verification. No payment has been received yet.";
   return buildMail({
     to,
     clinicName,

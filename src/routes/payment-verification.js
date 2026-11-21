@@ -17,6 +17,10 @@ const log = logger.child({ module: "routes/payment-verification" });
 
 const DECISIONS = ["submitted", "under_review", "approved", "rejected", "superseded"];
 
+// Both outlet (Fawry) and bank-transfer (InstaPay) orders settle by submitting
+// payment evidence, which staff review against their records. Cash never does.
+const PROOF_PAYMENT_METHODS = new Set(["fawry", "instapay"]);
+
 // Client sessions are opaque tokens; staff JWTs contain dots. Returning 403 for
 // a recognized client token keeps the admin API contract explicit (a missing
 // token still yields 401 from authenticateUser).
@@ -158,7 +162,7 @@ export async function confirmCashHandler(req, res) {
   }
 }
 
-/** Guest-capable InstaPay transfer submission; evidence goes to private storage. */
+/** Guest-capable proof submission for Fawry or InstaPay; evidence goes to private storage. */
 export async function transferSubmissionHandler(req, res) {
   const { id } = req.validated.params;
   const body = req.validated.body;
@@ -166,8 +170,8 @@ export async function transferSubmissionHandler(req, res) {
   try {
     const existing = await prisma.order.findUnique({ where: { id } });
     if (!existing) throw fail(404, "Order not found");
-    if (existing.paymentMethod !== "instapay") {
-      throw fail(400, "Only InstaPay orders accept transfer submissions.");
+    if (!PROOF_PAYMENT_METHODS.has(existing.paymentMethod)) {
+      throw fail(400, "Only Fawry or InstaPay orders accept payment proof submissions.");
     }
     assertSubmittable(existing, Boolean(req.user));
     assertOwnership(req, existing, body.phone);
@@ -193,7 +197,7 @@ export async function transferSubmissionHandler(req, res) {
         data: {
           orderId: id,
           paymentId: linked?.id ?? null,
-          method: "instapay",
+          method: fresh.paymentMethod,
           amount: round2(fresh.total),
           source: "customer_transfer",
           customerRef: body.transferReference,
@@ -212,7 +216,7 @@ export async function transferSubmissionHandler(req, res) {
       return row;
     }, { timeout: 15000 });
 
-    logAudit("transfer_submitted", id, `Transfer ${body.transferReference} submitted by ${body.senderName}`);
+    logAudit("transfer_submitted", id, `${verification.method} proof ${body.transferReference} submitted by ${body.senderName}`);
     // Never leak the private object key (or the original base64) to callers.
     res.json({ id: verification.id, decision: verification.decision, createdAt: verification.createdAt });
   } catch (err) {
@@ -321,7 +325,9 @@ router.post("/admin/:verificationId/approve", denyClientSession, authenticateUse
           ...(order.status === "pending" ? { status: "confirmed" } : {}),
         },
       });
-      await syncOrderPaymentStatus(tx, updatedOrder, "paid", { method: "instapay" });
+      await syncOrderPaymentStatus(tx, updatedOrder, "paid", {
+        method: updatedOrder.paymentMethod,
+      });
       return { verification, order: updatedOrder };
     }, { timeout: 15000 });
 

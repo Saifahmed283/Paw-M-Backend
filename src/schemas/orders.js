@@ -1,8 +1,9 @@
 import { z } from "zod";
 
 // Checkout no longer accepts a payment reference or proof image. Payment is
-// settled later by a trusted verification event (cash confirmation / transfer
-// approval), so client-supplied "paid" signals are rejected as unknown fields.
+// settled later by a trusted verification event (cash confirmation / payment
+// proof approval), so client-supplied "paid" signals are rejected as unknown
+// fields. Fawry and InstaPay orders both use the proof-verification path.
 export const createOrderSchema = z.object({
   body: z.object({
     customerName: z.string().min(1).max(120),
@@ -15,7 +16,7 @@ export const createOrderSchema = z.object({
       price: z.number().nonnegative().optional(),
       name: z.string().max(200).optional(),
     })).min(1, "Cart is empty"),
-    paymentMethod: z.enum(["cash", "instapay"]).optional().default("cash"),
+    paymentMethod: z.enum(["cash", "fawry", "instapay"]).optional().default("cash"),
     source: z.enum(["pos", "store"]).optional().default("store"),
     // POS-only: cashier attests that cash was physically received. Ignored for
     // store clients (the route rejects them outright).
@@ -39,7 +40,7 @@ export const updateOrderPaymentSchema = z.object({
     // "paid" is accepted by the schema only so the route can return an
     // explicit, actionable rejection. It is never written by this endpoint.
     paymentStatus: z.enum(["unpaid", "proof_submitted", "under_review", "paid", "rejected"]),
-    paymentMethod: z.enum(["cash", "instapay"]).optional(),
+    paymentMethod: z.enum(["cash", "fawry", "instapay"]).optional(),
   }),
 });
 

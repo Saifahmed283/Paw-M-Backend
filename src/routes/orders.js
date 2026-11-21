@@ -24,6 +24,9 @@ import { attributeSaleToActiveSession } from "../services/session-attribution.js
 const router = Router();
 const log = logger.child({ module: "routes/orders" });
 
+// Fawry outlet receipts and InstaPay transfers both settle via submitted proof.
+const PROOF_PAYMENT_METHODS = new Set(["fawry", "instapay"]);
+
 // Eight attempts per quarter hour per client, independent of the broad /api/orders
 // limiter. Overridable in tests via TRANSFER_SUBMISSION_RATE_MAX.
 const transferLimiter = rateLimit({
@@ -312,7 +315,7 @@ router.post("/:id/refund", authenticateUser, requireStaff, validate(refundOrderS
 router.post("/:id/confirm-cash", authenticateUser, requireStaff, validate(confirmCashSchema), confirmCashHandler);
 router.post("/:id/transfer-submission", optionalClientOrStaff, transferLimiter, validate(transferSubmissionSchema), transferSubmissionHandler);
 
-// Deprecated compatibility shim: forwards to the transfer-submission flow.
+// Deprecated compatibility shim: forwards to the proof-submission flow.
 // Cash orders are rejected; the image is stored privately, never on the Order.
 router.post("/:id/payment-proof", optionalClientOrStaff, transferLimiter, validate(submitPaymentProofSchema), async (req, res) => {
   const { id } = req.validated.params;
@@ -328,8 +331,8 @@ router.post("/:id/payment-proof", optionalClientOrStaff, transferLimiter, valida
   try {
     const order = await prisma.order.findUnique({ where: { id } });
     if (!order) return res.status(404).json({ error: "Order not found" });
-    if (order.paymentMethod !== "instapay") {
-      return res.status(400).json({ error: "Only InstaPay orders accept transfer submissions." });
+    if (!PROOF_PAYMENT_METHODS.has(order.paymentMethod)) {
+      return res.status(400).json({ error: "Only Fawry or InstaPay orders accept payment proof submissions." });
     }
     req.validated = {
       params: { id },
@@ -362,9 +365,6 @@ router.patch("/:id/payment", authenticateUser, requireStaff, validate(updateOrde
     }
     const existing = await prisma.order.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: "Order not found" });
-    if (paymentMethod === "fawry") {
-      return res.status(400).json({ error: "Fawry is not available." });
-    }
 
     const updated = await prisma.$transaction(async (tx) => {
       const order = await tx.order.update({

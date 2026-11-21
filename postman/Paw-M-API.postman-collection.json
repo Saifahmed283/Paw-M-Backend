@@ -2782,7 +2782,7 @@
         },
         {
           "name": "POST /api/orders (create POS/cash — staff)",
-          "description": "POS sale as staff (source:pos unlocks staff-priced overrides). But wait — update the name/price to match your actual product, or use price 0 to trust the catalog. Returns ORD-xxx → sampleOrderId.",
+          "description": "POS sale as staff (source:pos unlocks staff-priced overrides). But wait — update the name/price to match your actual product, or use price 0 to trust the catalog. paymentMethod accepts cash, fawry or instapay; Fawry/InstaPay orders start unpaid and settle through submitted payment proof. Returns ORD-xxx → sampleOrderId.",
           "event": [
             {
               "listen": "test",
@@ -2825,6 +2825,55 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerName\": \"Postman Client\",\n  \"phone\": \"+201012345678\",\n  \"email\": \"{{clientEmail}}\",\n  \"address\": \"Madinaty, Cairo\",\n  \"paymentMethod\": \"cash\",\n  \"source\": \"pos\",\n  \"items\": [\n    {\n      \"id\": \"{{sampleProductId}}\",\n      \"name\": \"QA Wellness Chew\",\n      \"price\": 18.49,\n      \"qty\": 2\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST /api/orders (create Fawry — unpaid + proof flow)",
+          "description": "Fawry is a real checkout method. The order starts unpaid/pending; the customer pays with the order ID as reference at any Fawry outlet, then submits the receipt as proof via POST /api/orders/:id/transfer-submission (guest-capable). Staff approve it through the payment-verification admin endpoint.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.test('201', () => pm.expect(pm.response.code).to.eql(201));",
+                  "pm.test('id ORD', () => pm.expect(j.id).to.include('ORD'));",
+                  "pm.test('Fawry order starts unpaid', () => pm.expect(j.paymentStatus).to.eql('unpaid'));",
+                  "pm.test('method is fawry', () => pm.expect(j.paymentMethod).to.eql('fawry'));",
+                  "if (j.id) pm.collectionVariables.set('sampleOrderId', j.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Postman Client\",\n  \"phone\": \"+201012345678\",\n  \"email\": \"{{clientEmail}}\",\n  \"address\": \"Madinaty, Cairo\",\n  \"paymentMethod\": \"fawry\",\n  \"source\": \"store\",\n  \"items\": [\n    {\n      \"id\": \"{{sampleProductId}}\",\n      \"name\": \"QA Wellness Chew\",\n      \"price\": 18.49,\n      \"qty\": 2\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"

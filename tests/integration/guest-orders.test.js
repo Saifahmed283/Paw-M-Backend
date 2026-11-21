@@ -152,8 +152,16 @@ describe("Order creation starts unpaid (no customer-set paid state)", () => {
     expect(mockPrisma.payment.create.mock.calls[0][0].data.status).toBe("unpaid");
   });
 
-  it("rejects Fawry and store-supplied cash reception", async () => {
-    expect((await request(app).post("/orders").send({ ...validOrderBody, paymentMethod: "fawry" })).status).toBe(400);
+  it("creates a Fawry order unpaid with no proof stored on the order", async () => {
+    const res = await request(app).post("/orders").send({ ...validOrderBody, paymentMethod: "fawry" });
+    expect(res.status).toBe(201);
+    const data = mockPrisma.order.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({
+      paymentMethod: "fawry", paymentStatus: "unpaid", paymentRef: "", proofImage: "",
+    });
+  });
+
+  it("rejects store-supplied cash reception", async () => {
     expect((await request(app).post("/orders").send({ ...validOrderBody, cashReceived: true, cashReceivedAmount: 100 })).status).toBe(400);
   });
 
@@ -265,7 +273,7 @@ describe("Trusted verification endpoints", () => {
     expect(res.status).toBe(409);
   });
 
-  it("requires an InstaPay order for transfer submission", async () => {
+  it("requires a proof-based order for proof submission", async () => {
     mockPrisma.order.findUnique.mockResolvedValue(orderRecord({ paymentMethod: "cash" }));
     const res = await request(app)
       .post("/orders/ORD-TEST1/transfer-submission")
@@ -298,6 +306,26 @@ describe("Trusted verification endpoints", () => {
       evidenceKey: "payment-evidence/ORD-TEST1/abc.png", amount: 100,
     });
     expect(logAudit).toHaveBeenCalledWith("transfer_submitted", "ORD-TEST1", expect.any(String));
+  });
+
+  it("accepts Fawry proof and records the order's method on the verification", async () => {
+    mockPrisma.order.findUnique.mockResolvedValue(orderRecord({ paymentMethod: "fawry" }));
+    const res = await request(app)
+      .post("/orders/ORD-TEST1/transfer-submission")
+      .send({
+        senderName: "Guest Customer", transferReference: "FAW-123", phone: "01000000000",
+        transferredAt: "2026-11-20T10:30:00.000Z",
+        evidenceBase64: "data:image/png;base64,AAAA",
+      });
+    expect(res.status).toBe(200);
+    expect(storeEvidence).toHaveBeenCalled();
+    expect(mockPrisma.paymentVerification.create.mock.calls[0][0].data).toMatchObject({
+      method: "fawry", source: "customer_transfer", decision: "submitted",
+      customerRef: "FAW-123",
+    });
+    expect(mockPrisma.order.update.mock.calls[0][0].data).toMatchObject({
+      paymentStatus: "proof_submitted", paymentRef: "FAW-123", proofImage: "",
+    });
   });
 
   it("requires the transfer date and screenshot, not just a reference", async () => {
@@ -382,13 +410,17 @@ describe("Old payment holes are closed", () => {
     expect(mockPrisma.order.update).not.toHaveBeenCalled();
   });
 
-  it("PATCH /orders/:id/payment refuses Fawry", async () => {
+  it("PATCH /orders/:id/payment accepts Fawry for non-settling status edits", async () => {
     mockPrisma.order.findUnique.mockResolvedValue(orderRecord());
+    mockPrisma.order.update.mockImplementation(async ({ data }) => orderRecord(data));
     const res = await request(app)
       .patch("/orders/ORD-TEST1/payment")
       .set("x-test-staff", "1")
       .send({ paymentStatus: "unpaid", paymentMethod: "fawry" });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(mockPrisma.order.update.mock.calls[0][0].data).toMatchObject({
+      paymentStatus: "unpaid", paymentMethod: "fawry", paidAt: null,
+    });
   });
 
   it("PATCH /orders/:id/status blocks completion until payment is verified", async () => {
