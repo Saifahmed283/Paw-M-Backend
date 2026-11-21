@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { config } from "../config.js";
 import { prisma } from "../lib/prisma.js";
+import { employeeEmailForUsername } from "../lib/employee-email.js";
 import { logAudit } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
 import { validate } from "../middleware/validate.js";
@@ -199,7 +200,7 @@ function findLinkedEmployee(username, client = prisma) {
 }
 
 function defaultEmployeeEmail(username) {
-  return `${username}@paw-m.local`;
+  return employeeEmailForUsername(username);
 }
 
 function companionEmployeeData(username, role) {

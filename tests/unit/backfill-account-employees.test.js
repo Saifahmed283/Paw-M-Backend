@@ -28,6 +28,8 @@ function makePrisma() {
         id: "emp-new",
         email: "cashier@paw-m.local",
       }),
+      findMany: vi.fn().mockResolvedValue([]),
+      update: vi.fn().mockResolvedValue({}),
     },
   };
 }
@@ -43,6 +45,7 @@ describe("backfill-account-employees", () => {
 
   it("exposes the same companion employee shape used for new accounts", () => {
     expect(defaultEmployeeEmail("cashier")).toBe("cashier@paw-m.local");
+    expect(defaultEmployeeEmail("ismail@pawm")).toBe("ismail.pawm@paw-m.local");
     expect(legacyEmployeeWhere("cashier")).toEqual({
       OR: [{ email: "cashier" }, { email: { startsWith: "cashier@" } }],
     });
@@ -110,5 +113,28 @@ describe("backfill-account-employees", () => {
 
     expect(report[0].action).toContain("failed:");
     expect(report[1].action).toBe("created + linked");
+  });
+
+  it("repairs malformed companion emails created from usernames containing @", async () => {
+    prisma.adminUser.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(
+        where?.employeeId === null
+          ? ACCOUNTS
+          : [{ id: 7, username: "ismail@pawm", role: "staff", employeeId: "emp-legacy" }],
+      ),
+    );
+    prisma.employee.findMany.mockResolvedValueOnce([
+      { id: "emp-legacy", email: "ismail@pawm@paw-m.local" },
+    ]);
+
+    await backfillAccountEmployees({ prisma, apply: true, log });
+
+    expect(prisma.employee.update).toHaveBeenCalledWith({
+      where: { id: "emp-legacy" },
+      data: { email: "ismail.pawm@paw-m.local" },
+    });
+    expect(log.mock.calls.flat().join("\n")).toContain(
+      "ismail@pawm@paw-m.local -> ismail.pawm@paw-m.local",
+    );
   });
 });

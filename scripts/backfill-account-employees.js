@@ -11,9 +11,40 @@
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { employeeEmailForUsername } from "../src/lib/employee-email.js";
 
 export function defaultEmployeeEmail(username) {
-  return `${username}@paw-m.local`;
+  return employeeEmailForUsername(username);
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Older companion employees got emails like "staff@pawm@paw-m.local" when the
+ * username itself contained "@". Those records fail validation on every edit,
+ * so repair them while the startup backfill runs.
+ */
+async function normalizeLinkedEmployeeEmails({ prisma, apply, log }) {
+  if (typeof prisma.employee.findMany !== "function") return;
+  const accounts = (await prisma.adminUser.findMany({
+    where: { employeeId: { not: null } },
+    select: { id: true, username: true, employeeId: true },
+  })).filter((account) => account.employeeId);
+  if (accounts.length === 0) return;
+
+  const employees = await prisma.employee.findMany({
+    where: { id: { in: accounts.map((a) => a.employeeId) } },
+    select: { id: true, email: true },
+  });
+  const byId = new Map(employees.map((employee) => [employee.id, employee]));
+
+  for (const account of accounts) {
+    const employee = byId.get(account.employeeId);
+    if (!employee || EMAIL_RE.test(employee.email ?? "")) continue;
+    const email = employeeEmailForUsername(account.username);
+    if (apply) await prisma.employee.update({ where: { id: employee.id }, data: { email } });
+    log(`${apply ? "fixed" : "would fix"} employee email: ${employee.email} -> ${email}`);
+  }
 }
 
 /** Legacy pairing rule: username -> Employee.email (exact or local part). */
@@ -99,6 +130,7 @@ export async function backfillAccountEmployees({ prisma, apply = false, log = co
   for (const row of report) {
     log(`${row.action.padEnd(20)} ${row.username} -> ${row.employeeId ?? "(new)"} (${row.email})`);
   }
+  await normalizeLinkedEmployeeEmails({ prisma, apply, log });
   const failed = report.filter((r) => r.action.startsWith("failed")).length;
   log(
     `\n${apply ? "Applied" : "DRY RUN — no database writes"}: ${report.length - failed} of ${report.length} account(s) processed successfully.`,

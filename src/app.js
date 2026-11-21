@@ -77,7 +77,16 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-app.use("/api/auth", authLimiter);
+// The strict limiter is for credential endpoints only. Admin account CRUD and
+// the session check also live under /api/auth, but throttling them makes the
+// staff page fail with 429 after a handful of edits/activations/deletions.
+const AUTH_LIMITER_EXEMPT_PATHS = ["/api/auth/accounts", "/api/auth/me"];
+const authLimiterForCredentials = (req, res, next) =>
+  AUTH_LIMITER_EXEMPT_PATHS.some((path) => req.originalUrl.startsWith(path))
+    ? next()
+    : authLimiter(req, res, next);
+
+app.use("/api/auth", authLimiterForCredentials);
 app.use("/api/client-auth", authLimiter);
 
 app.use("/api/bookings", sensitiveLimiter);
@@ -130,7 +139,9 @@ app.use("/api", apiLimiter);
 
 // ── Sensitive routes rate limit ──────────────────────────────────────────────
 app.use("/api/payroll", sensitiveLimiter);
-app.use("/api/employees", sensitiveLimiter);
+// Employee records back the admin-only staff page: a single screen reads and
+// writes them repeatedly, so the 30-request sensitive limiter must not cut it
+// off mid-action. The general API limiter still applies.
 app.use("/api/settings", sensitiveLimiter);
 
 // ── Routes ───────────────────────────────────────────────────────────────────
