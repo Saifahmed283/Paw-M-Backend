@@ -114,6 +114,27 @@ describe("Order validation", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("requires a customer name and a valid phone on POS orders", async () => {
+    const { createOrderSchema } = await import("../../src/schemas/orders.js");
+    const base = { items: [{ id: "prod-1", qty: 1 }], source: "pos" };
+
+    expect(
+      createOrderSchema.safeParse({
+        body: { ...base, customerName: "A", phone: "01000000000" },
+      }).success,
+    ).toBe(false);
+    expect(
+      createOrderSchema.safeParse({
+        body: { ...base, customerName: "Ahmed", phone: "123" },
+      }).success,
+    ).toBe(false);
+    expect(
+      createOrderSchema.safeParse({
+        body: { ...base, customerName: "Ahmed", phone: "01000000000" },
+      }).success,
+    ).toBe(true);
+  });
 });
 
 describe("Employee validation", () => {

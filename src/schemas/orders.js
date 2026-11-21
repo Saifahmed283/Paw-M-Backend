@@ -24,7 +24,26 @@ export const createOrderSchema = z.object({
     cashReceivedAmount: z.number().nonnegative().optional().default(0),
     discountAmount: z.number().nonnegative().optional().default(0),
     discountLabel: z.string().max(120).optional().default(""),
-  }).strict(),
+  }).strict().superRefine((data, ctx) => {
+    // A POS sale is tied to a real customer: require a name and a valid phone
+    // number so receipts and order tracking always have someone to contact.
+    if (data.source !== "pos") return;
+    if (data.customerName.trim().length < 2) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["customerName"],
+        message: "A customer name is required",
+      });
+    }
+    const digits = data.phone.replace(/\D/g, "");
+    if (digits.length < 10 || digits.length > 15) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["phone"],
+        message: "A valid customer phone number is required",
+      });
+    }
+  }),
 });
 
 export const updateOrderStatusSchema = z.object({

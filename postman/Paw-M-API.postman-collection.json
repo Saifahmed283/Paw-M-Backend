@@ -2782,7 +2782,7 @@
         },
         {
           "name": "POST /api/orders (create POS/cash — staff)",
-          "description": "POS sale as staff (source:pos unlocks staff-priced overrides). But wait — update the name/price to match your actual product, or use price 0 to trust the catalog. paymentMethod accepts cash, fawry or instapay; Fawry/InstaPay orders start unpaid and settle through submitted payment proof. Returns ORD-xxx → sampleOrderId.",
+          "description": "POS sale as staff (source:pos unlocks staff-priced overrides). customerName (2+ chars) and phone (10-15 digits) are required on POS orders. But wait — update the name/price to match your actual product, or use price 0 to trust the catalog. paymentMethod accepts cash, fawry or instapay; Fawry/InstaPay orders start unpaid and settle through submitted payment proof. Returns ORD-xxx → sampleOrderId.",
           "event": [
             {
               "listen": "test",
