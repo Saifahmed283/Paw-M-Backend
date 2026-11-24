@@ -35,6 +35,8 @@ const transferLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many transfer submissions. Try again in 15 minutes." },
+  skip: (req) =>
+    process.env.NODE_ENV !== "production" && req.get("x-pawm-e2e") === "1",
 });
 router.get("/", authenticateUser, requireStaff, async (req, res) => {
   try {

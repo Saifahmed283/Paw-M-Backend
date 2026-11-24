@@ -54,11 +54,19 @@ app.use(express.urlencoded({ extended: true, limit: config.bodyLimit }));
 app.use(cookieParser());
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
+// End-to-end runs make far more requests than a human browsing session. The
+// harness tags every browser request with `x-pawm-e2e`; in non-production
+// environments those requests bypass throttling so a long suite never fails
+// with 429s halfway through.
+const isE2ERequest = (req) =>
+  process.env.NODE_ENV !== "production" && req.get("x-pawm-e2e") === "1";
+
 const sensitiveLimiter = rateLimit({
   windowMs: config.rateLimit.windowMs,
   max: config.rateLimit.sensitiveMax,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isE2ERequest,
 });
 
 const apiLimiter = rateLimit({
@@ -66,6 +74,7 @@ const apiLimiter = rateLimit({
   max: config.rateLimit.apiMax,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isE2ERequest,
 });
 
 // Stricter limiter for credential/verification endpoints (login, register,
@@ -75,6 +84,7 @@ const authLimiter = rateLimit({
   max: config.rateLimit.authMax,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isE2ERequest,
 });
 
 // The strict limiter is for credential endpoints only. Admin account CRUD and
@@ -82,6 +92,7 @@ const authLimiter = rateLimit({
 // staff page fail with 429 after a handful of edits/activations/deletions.
 const AUTH_LIMITER_EXEMPT_PATHS = ["/api/auth/accounts", "/api/auth/me"];
 const authLimiterForCredentials = (req, res, next) =>
+  isE2ERequest(req) ||
   AUTH_LIMITER_EXEMPT_PATHS.some((path) => req.originalUrl.startsWith(path))
     ? next()
     : authLimiter(req, res, next);
