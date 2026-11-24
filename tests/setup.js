@@ -74,6 +74,10 @@ const mockPrisma = {
     create: vi.fn(),
     update: vi.fn(),
   },
+  cashCustody: {
+    findUnique: vi.fn(),
+    create: vi.fn(),
+  },
   payrollRecord: {
     findMany: vi.fn(),
     findUnique: vi.fn(),

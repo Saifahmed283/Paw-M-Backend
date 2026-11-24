@@ -112,6 +112,16 @@ export const cashDrawerCloseSchema = z.object({
   }),
 });
 
+// Start-of-shift cash custody & handover. Amount must be zero when no drawer
+// was handed over; the route normalises it to 0 for a false `hasDrawer`.
+export const cashCustodySchema = z.object({
+  body: z.object({
+    hasDrawer: z.boolean(),
+    openingAmount: z.number().nonnegative().max(1_000_000_000),
+    note: z.string().max(200).optional().default(""),
+  }),
+});
+
 // Legacy endpoint kept as a compatibility shim; it forwards into the
 // transfer-submission flow and never stores the image on the Order row.
 export const submitPaymentProofSchema = z.object({

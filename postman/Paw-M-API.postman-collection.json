@@ -3913,6 +3913,95 @@
           }
         },
         {
+          "name": "GET /api/work-session/custody (current shift — staff)",
+          "description": "Start-of-shift cash custody & handover declaration for the caller's open shift, or null. Any staff role may call it.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.test('null or custody', () => pm.expect(j === null || typeof j.id === 'string').to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{staffToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/work-session/custody",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "work-session",
+                "custody"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/work-session/custody (staff, once per shift)",
+          "description": "Records cash custody & handover: hasDrawer (boolean), openingAmount (>= 0, forced to 0 when no drawer), optional note. Idempotent: returns the existing declaration on a second submit.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.test('has custody id', () => pm.expect(j.id).to.be.a('string'));",
+                  "pm.test('amount is a number', () => pm.expect(j.openingAmount).to.be.a('number'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{staffToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hasDrawer\": true,\n  \"openingAmount\": 1250.5,\n  \"note\": \"float from previous shift\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/work-session/custody",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "work-session",
+                "custody"
+              ]
+            }
+          }
+        },
+        {
           "name": "GET /api/work-sessions/me (my sessions — staff)",
           "description": "Paginated work sessions for the current staff member.",
           "event": [

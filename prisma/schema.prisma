@@ -408,6 +408,28 @@ model WorkSession {
 
   createdAt       DateTime        @default(now())
 
+  custody         CashCustody?
+
+  @@index([employeeId, date])
+  @@index([date])
+}
+
+/// Start-of-shift cash custody & handover declaration. One record per work
+/// session: whether the cashier took charge of a drawer and how much cash it
+/// contained at handover. Required before the till can be used.
+model CashCustody {
+  id              String      @id @default(cuid())
+  workSessionId   String      @unique
+  workSession     WorkSession @relation(fields: [workSessionId], references: [id], onDelete: Cascade)
+
+  employeeId      String
+  date            String          // YYYY-MM-DD (clinic day)
+  hasDrawer       Boolean         @default(false)
+  openingAmount   Float           @default(0) // 0 when hasDrawer is false
+  note            String          @default("")
+
+  createdAt       DateTime        @default(now())
+
   @@index([employeeId, date])
   @@index([date])
 }
