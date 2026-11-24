@@ -110,6 +110,7 @@ beforeEach(() => {
   mockPrisma.paymentVerification.findMany.mockResolvedValue([]);
   mockPrisma.clinicSettings.findUnique.mockResolvedValue(null);
   mockPrisma.cashDrawerClose.create.mockImplementation(async ({ data }) => ({ id: "CD-1", ...data }));
+  mockPrisma.cashDrawerClose.update.mockImplementation(async ({ where, data }) => ({ id: where.id, ...data }));
   mockPrisma.cashDrawerClose.findFirst.mockResolvedValue(null);
 });
 
@@ -287,8 +288,27 @@ describe("Cash drawer reconciliation", () => {
     expect(logAudit).toHaveBeenCalledWith("cash_drawer_closed", date, expect.any(String));
   });
 
-  it("returns the latest close, recomputed expected total and verified payments", async () => {
-    mockPrisma.cashDrawerClose.findFirst.mockResolvedValue({ id: "CD-1", date, expected: 250, counted: 250, variance: 0 });
+  it("saves the selected clinic day and updates that day's existing close", async () => {
+    const earlierDay = "2026-11-20";
+    mockPrisma.cashDrawerClose.findFirst.mockResolvedValue({ id: "CD-OLD", date: earlierDay, expected: 250, counted: 100, variance: -150 });
+
+    const res = await request(app)
+      .post("/payment-verification/admin/cash-drawer/close")
+      .set(staff)
+      .send({ date: earlierDay, countedAmount: 250, note: "corrected" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: "CD-OLD", date: earlierDay, counted: 250, variance: 0, note: "corrected" });
+    expect(mockPrisma.cashDrawerClose.create).not.toHaveBeenCalled();
+    expect(mockPrisma.cashDrawerClose.update).toHaveBeenCalledWith({
+      where: { id: "CD-OLD" },
+      data: expect.objectContaining({ date: earlierDay, counted: 250 }),
+    });
+    expect(logAudit).toHaveBeenCalledWith("cash_drawer_updated", earlierDay, expect.any(String));
+  });
+
+  it("returns the saved expected snapshot, not a later recomputed total", async () => {
+    mockPrisma.cashDrawerClose.findFirst.mockResolvedValue({ id: "CD-1", date, expected: 240, counted: 240, variance: 0 });
     mockPrisma.paymentVerification.findMany.mockResolvedValue([verification({
       decision: "approved",
       source: "cash_reception",
@@ -298,7 +318,9 @@ describe("Cash drawer reconciliation", () => {
     const res = await request(app).get(`/payment-verification/admin/cash-drawer?date=${date}`).set(staff);
     expect(res.status).toBe(200);
     expect(res.body.close.id).toBe("CD-1");
-    expect(res.body.expected).toBe(250);
+    // A late cash approval raised the live total to 250, but the saved
+    // reconciliation must stay at the 240 that was actually counted against.
+    expect(res.body.expected).toBe(240);
     expect(res.body.payments[0]).toMatchObject({ source: "cash_reception", customerName: "Owner" });
     const listCall = mockPrisma.paymentVerification.findMany.mock.calls[0][0];
     expect(listCall.where.source).toBe("cash_reception");
@@ -306,6 +328,8 @@ describe("Cash drawer reconciliation", () => {
 
   it("rejects a malformed date and non-staff close attempts", async () => {
     expect((await request(app).get("/payment-verification/admin/cash-drawer?date=nope").set(staff)).status).toBe(400);
+    expect((await request(app).post("/payment-verification/admin/cash-drawer/close").set(staff)
+      .send({ date: "nope", countedAmount: 100 })).status).toBe(400);
     expect((await request(app).post("/payment-verification/admin/cash-drawer/close").set(clientToken)
       .send({ countedAmount: 100 })).status).toBe(403);
   });

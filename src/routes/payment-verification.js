@@ -446,14 +446,30 @@ async function expectedForDate(db, dateKey) {
 router.post("/admin/cash-drawer/close", denyClientSession, authenticateUser, requireStaff, validate(cashDrawerCloseSchema), async (req, res) => {
   const { countedAmount, note } = req.validated.body;
   try {
-    const date = todayStr();
+    // Honour the day selected on the card. Falling back to "now" here made a
+    // correction for an earlier day appear unsaved when the page reloaded.
+    const date = req.validated.body.date ?? todayStr();
     const expected = await expectedForDate(prisma, date);
     const counted = round2(countedAmount);
-    const record = await prisma.cashDrawerClose.create({
-      data: { date, expected, counted, variance: round2(counted - expected), countedBy: req.user.id, note },
+    const variance = round2(counted - expected);
+    const data = { date, expected, counted, variance, countedBy: req.user.id, note };
+
+    // One reconciliation per clinic day. Updating the existing row keeps a
+    // corrected count visible immediately instead of stacking stale closes.
+    const existing = await prisma.cashDrawerClose.findFirst({
+      where: { date },
+      orderBy: { createdAt: "desc" },
     });
-    logAudit("cash_drawer_closed", date, `Drawer closed: expected ${expected}, counted ${counted}, variance ${round2(counted - expected)} by staff #${req.user.id}`);
-    res.status(201).json(record);
+    const record = existing
+      ? await prisma.cashDrawerClose.update({ where: { id: existing.id }, data })
+      : await prisma.cashDrawerClose.create({ data });
+
+    logAudit(
+      existing ? "cash_drawer_updated" : "cash_drawer_closed",
+      date,
+      `Drawer ${existing ? "updated" : "closed"}: expected ${expected}, counted ${counted}, variance ${variance} by staff #${req.user.id}`,
+    );
+    res.status(existing ? 200 : 201).json(record);
   } catch (err) {
     respondWithError(res, err, "Failed to close cash drawer");
   }
@@ -466,7 +482,7 @@ router.get("/admin/cash-drawer", denyClientSession, authenticateUser, requireSta
   }
   try {
     const { start, end } = clinicDayRange(date);
-    const expected = await expectedForDate(prisma, date);
+    const liveExpected = await expectedForDate(prisma, date);
     const [close, payments] = await Promise.all([
       prisma.cashDrawerClose.findFirst({ where: { date }, orderBy: { createdAt: "desc" } }),
       prisma.paymentVerification.findMany({
@@ -479,6 +495,12 @@ router.get("/admin/cash-drawer", denyClientSession, authenticateUser, requireSta
         include: { order: { select: { customerName: true, phone: true } } },
       }),
     ]);
+    // Once a count is saved, freeze the expected total that was reconciled.
+    // Otherwise late approvals make an already-saved drawer look wrong and it
+    // only becomes stable after the day ends.
+    const expected = close?.expected === null || close?.expected === undefined
+      ? liveExpected
+      : round2(close.expected);
     res.json({
       date,
       close: close ?? null,

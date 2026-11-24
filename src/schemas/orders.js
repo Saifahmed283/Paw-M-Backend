@@ -107,6 +107,13 @@ export const rejectTransferSchema = z.object({
 
 export const cashDrawerCloseSchema = z.object({
   body: z.object({
+    // The card can be saved for any open clinic day, not just "right now".
+    // Defaults to the Cairo day on the server when omitted.
+    date: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)))
+      .optional(),
     countedAmount: z.number().nonnegative(),
     note: z.string().max(200).optional().default(""),
   }),
