@@ -74,10 +74,5 @@ export async function syncPaymentToOrder(db, payment) {
     ...(methodChanged ? { paymentMethod: payment.method } : {}),
     paidAt: payment.status === "paid" ? (order.paidAt ?? new Date()) : null,
   };
-  // Verification completes the sale: an InstaPay/Fawry order becomes a
-  // confirmed sale once its proof has been checked and marked paid.
-  if (payment.status === "paid" && ["pending", "confirmed"].includes(order.status)) {
-    data.status = "confirmed";
-  }
   return db.order.update({ where: { id: payment.orderId }, data });
 }

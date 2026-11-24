@@ -6,6 +6,7 @@ import {
   updatePaymentSchema,
 } from "../../src/schemas/payments.js";
 import { classifyClient } from "../../src/routes/clients.js";
+import { createClientSchema } from "../../src/schemas/clients.js";
 
 describe("Payment visit-request schemas", () => {
   it("accepts a visit payment request with items", () => {
@@ -99,6 +100,33 @@ describe("Payment visit-request schemas", () => {
         body: { status: "paid", clientId: "cl-1", kind: "visit" },
       }).success
     ).toBe(true);
+  });
+});
+
+describe("Manual client creation schema", () => {
+  it("accepts a manual client with a usable password", () => {
+    const result = createClientSchema.safeParse({
+      body: {
+        fullName: "Manual Client",
+        email: "Manual@Example.com",
+        phone: "+201234567890",
+        password: "temporary123",
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.body.email).toBe("manual@example.com");
+      expect(result.data.body.phone).toBe("+201234567890");
+    }
+  });
+
+  it("rejects missing fields and short passwords", () => {
+    expect(createClientSchema.safeParse({ body: { fullName: "x" } }).success).toBe(false);
+    expect(
+      createClientSchema.safeParse({
+        body: { fullName: "x", email: "x@example.com", password: "123" },
+      }).success
+    ).toBe(false);
   });
 });
 

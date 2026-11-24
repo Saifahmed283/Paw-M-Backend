@@ -1,10 +1,12 @@
 import { Router } from "express";
+import crypto from "node:crypto";
+import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireAdmin, requirePayrollOrAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { notifyClientSchema, updateClientSchema } from "../schemas/clients.js";
+import { createClientSchema, notifyClientSchema, updateClientSchema } from "../schemas/clients.js";
 import { sendMail, buildClientNotifyEmail } from "../lib/email.js";
 import { logAudit } from "../lib/utils.js";
 
@@ -41,6 +43,50 @@ async function activityMap(model, ids) {
   });
   return new Map(rows.map((r) => [r.clientId, r._max.createdAt]));
 }
+
+router.post(
+  "/",
+  authenticateUser,
+  requirePayrollOrAdmin,
+  validate(createClientSchema),
+  async (req, res) => {
+    const { fullName, email, phone, password } = req.validated.body;
+    try {
+      const salt = crypto.randomBytes(16).toString("hex");
+      const passwordHash = bcrypt.hashSync(password, 12);
+      const client = await prisma.clientAccount.create({
+        data: { fullName, email, phone: phone || "", passwordHash, salt },
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          phone: true,
+          suspended: true,
+          suspendedAt: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+      logAudit("client_create", client.id, `Created client ${client.fullName}`);
+      res.status(201).json({
+        ...client,
+        type: "new",
+        petsCount: 0,
+        bookingsCount: 0,
+        ordersCount: 0,
+        totalPaid: 0,
+        outstanding: 0,
+        lastActivity: client.createdAt,
+      });
+    } catch (err) {
+      if (err?.code === "P2002") {
+        return res.status(409).json({ error: "An account with this email already exists." });
+      }
+      log.error({ err }, "failed to create client");
+      res.status(500).json({ error: "Failed to create client" });
+    }
+  },
+);
 
 router.get("/", authenticateUser, requirePayrollOrAdmin, async (req, res) => {
   try {

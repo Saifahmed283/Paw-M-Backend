@@ -172,7 +172,7 @@ describe("Order creation starts unpaid (no customer-set paid state)", () => {
       .send({ ...validOrderBody, source: "pos", cashReceived: true, cashReceivedAmount: 100 });
     expect(res.status).toBe(201);
     const data = mockPrisma.order.create.mock.calls[0][0].data;
-    expect(data).toMatchObject({ paymentStatus: "paid", status: "confirmed", source: "pos" });
+    expect(data).toMatchObject({ paymentStatus: "paid", status: "pending", source: "pos" });
     expect(data.paidAt).toBeInstanceOf(Date);
     expect(mockPrisma.paymentVerification.create.mock.calls[0][0].data).toMatchObject({
       source: "cash_reception", decision: "approved", reviewerId: 1, amount: 100,
@@ -245,7 +245,7 @@ describe("Trusted verification endpoints", () => {
       .send({ amountReceived: 100, note: "counted" });
     expect(res.status).toBe(200);
     expect(res.body.paymentStatus).toBe("paid");
-    expect(res.body.status).toBe("confirmed");
+    expect(res.body.status).toBe("pending");
     expect(mockPrisma.paymentVerification.create.mock.calls[0][0].data).toMatchObject({
       source: "cash_reception", decision: "approved", reviewerId: 1, amount: 100,
     });

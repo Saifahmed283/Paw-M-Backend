@@ -176,9 +176,9 @@ describe("Admin verification decisions", () => {
       note: "matched bank record",
     });
     expect(data.reviewedAt).toBeInstanceOf(Date);
-    expect(mockPrisma.order.update.mock.calls[0][0].data).toMatchObject({
-      paymentStatus: "paid", status: "confirmed",
-    });
+    const orderUpdate = mockPrisma.order.update.mock.calls[0][0].data;
+    expect(orderUpdate).toMatchObject({ paymentStatus: "paid" });
+    expect(orderUpdate).not.toHaveProperty("status");
     expect(mockPrisma.payment.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "paid" }) })
     );

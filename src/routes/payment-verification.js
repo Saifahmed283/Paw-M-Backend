@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { logAudit, todayStr } from "../lib/utils.js";
+import { clinicDayRange, expectedForDate, round2 } from "../lib/clinic-day.js";
 import { logger } from "../lib/logger.js";
 import { authenticateUser, requireAdmin, requireStaff } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
@@ -32,7 +33,6 @@ function denyClientSession(req, res, next) {
   return next();
 }
 
-const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
 function respondWithError(res, err, fallbackMessage) {
@@ -147,7 +147,6 @@ export async function confirmCashHandler(req, res) {
         data: {
           paymentStatus: "paid",
           paidAt: now,
-          ...(fresh.status === "pending" ? { status: "confirmed" } : {}),
         },
       });
       await syncOrderPaymentStatus(tx, order, "paid", { method: "cash" });
@@ -328,7 +327,6 @@ router.post("/admin/:verificationId/approve", denyClientSession, authenticateUse
           paymentStatus: "paid",
           paidAt: now,
           paymentRef: bankTransactionReference,
-          ...(order.status === "pending" ? { status: "confirmed" } : {}),
         },
       });
       await syncOrderPaymentStatus(tx, updatedOrder, "paid", {
@@ -399,49 +397,6 @@ router.get("/admin/:verificationId/evidence-url", denyClientSession, authenticat
 });
 
 // ── Cairo-day cash drawer reconciliation ──────────────────────────────────────
-
-/**
- * First UTC instant at which the clinic (Africa/Cairo) local date reaches
- * `dateKey`. Binary search keeps this correct across DST shifts.
- */
-function clinicDayStart(dateKey) {
-  const guess = Date.parse(`${dateKey}T00:00:00Z`);
-  let lo = guess - 24 * 60 * 60 * 1000;
-  let hi = guess + 24 * 60 * 60 * 1000;
-  while (lo < hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    if (todayStr(new Date(mid)) < dateKey) lo = mid + 1;
-    else hi = mid;
-  }
-  return new Date(lo);
-}
-
-function clinicDayRange(dateKey) {
-  const start = clinicDayStart(dateKey);
-  const end = clinicDayStart(nextDateKey(dateKey));
-  return { start, end };
-}
-
-function nextDateKey(dateKey) {
-  const d = new Date(`${dateKey}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + 1);
-  return d.toISOString().slice(0, 10);
-}
-
-async function expectedForDate(db, dateKey) {
-  const { start, end } = clinicDayRange(dateKey);
-  // The drawer holds physical cash only. Approved InstaPay transfers are bank
-  // deposits and must never be counted as cash in the till.
-  const aggregate = await db.paymentVerification.aggregate({
-    _sum: { amount: true },
-    where: {
-      decision: "approved",
-      source: "cash_reception",
-      createdAt: { gte: start, lt: end },
-    },
-  });
-  return round2(aggregate?._sum?.amount ?? 0);
-}
 
 router.post("/admin/cash-drawer/close", denyClientSession, authenticateUser, requireStaff, validate(cashDrawerCloseSchema), async (req, res) => {
   const { countedAmount, note } = req.validated.body;

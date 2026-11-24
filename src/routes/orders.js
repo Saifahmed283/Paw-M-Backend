@@ -108,7 +108,9 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
             address: body.address,
             items: lines,
             total,
-            status: posCashConfirmed ? "confirmed" : "pending",
+            // Paying at the counter settles the money, but the sale still needs
+            // a deliberate staff confirmation before it becomes confirmed.
+            status: "pending",
             paymentMethod,
             paymentStatus,
             paidAt: posCashConfirmed ? now : null,
