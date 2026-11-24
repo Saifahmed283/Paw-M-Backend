@@ -62,6 +62,7 @@ vi.mock("../../src/lib/utils.js", async (importOriginal) => {
 
 import paymentVerificationRoutes from "../../src/routes/payment-verification.js";
 import orderRoutes from "../../src/routes/orders.js";
+import { createOrderTransactional } from "../../src/services/orders.js";
 import { logAudit, todayStr } from "../../src/lib/utils.js";
 import { deleteEvidence, presignEvidence, storeEvidence } from "../../src/services/evidence-store.js";
 
@@ -125,6 +126,16 @@ describe("Admin access control", () => {
     expect((await request(app).post("/payment-verification/admin/PV-1/reject").set(clientToken)
       .send({ reason: "not a real transfer" })).status).toBe(403);
     expect(mockPrisma.paymentVerification.update).not.toHaveBeenCalled();
+  });
+
+  it("filters submissions to a single order when jumped to from the till", async () => {
+    await request(app)
+      .get("/payment-verification/admin/submissions?orderId=ORD-1")
+      .set(staff);
+    expect(mockPrisma.paymentVerification.findMany.mock.calls[0][0].where).toEqual({
+      decision: "submitted",
+      orderId: "ORD-1",
+    });
   });
 
   it("lists submissions with joined customer/reviewer fields", async () => {
@@ -297,6 +308,64 @@ describe("Cash drawer reconciliation", () => {
     expect((await request(app).get("/payment-verification/admin/cash-drawer?date=nope").set(staff)).status).toBe(400);
     expect((await request(app).post("/payment-verification/admin/cash-drawer/close").set(clientToken)
       .send({ countedAmount: 100 })).status).toBe(403);
+  });
+});
+
+describe("Proof orders enter the verification queue", () => {
+  it("queues a POS bank-transfer sale at checkout so the queue is not empty", async () => {
+    vi.mocked(createOrderTransactional).mockResolvedValue({
+      total: 250,
+      lines: [{ id: "p1", qty: 1, price: 250, name: "Grooming" }],
+      discountAmount: 0,
+      discountLabel: "",
+    });
+    mockPrisma.order.create.mockResolvedValue(order({ paymentMethod: "instapay", source: "pos" }));
+    mockPrisma.payment.create.mockResolvedValue({ id: "PAY-POS-1" });
+
+    const res = await request(app).post("/orders").set(staff).send({
+      customerName: "Walk-in Customer",
+      phone: "01000000000",
+      items: [{ id: "p1", qty: 1 }],
+      paymentMethod: "instapay",
+      source: "pos",
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.paymentStatus).toBe("unpaid");
+    const queued = mockPrisma.paymentVerification.create.mock.calls.at(-1)[0].data;
+    expect(queued).toMatchObject({
+      orderId: "ORD-1",
+      paymentId: "PAY-POS-1",
+      method: "instapay",
+      decision: "submitted",
+      source: "pos_transfer",
+    });
+  });
+
+  it("leaves cash sales out of the transfer review queue", async () => {
+    vi.mocked(createOrderTransactional).mockResolvedValue({
+      total: 100,
+      lines: [{ id: "p1", qty: 1, price: 100, name: "Grooming" }],
+      discountAmount: 0,
+      discountLabel: "",
+    });
+    mockPrisma.order.create.mockResolvedValue(order({ paymentMethod: "cash", source: "pos", paymentStatus: "paid" }));
+    mockPrisma.payment.create.mockResolvedValue({ id: "PAY-POS-2" });
+
+    const res = await request(app).post("/orders").set(staff).send({
+      customerName: "Walk-in Customer",
+      phone: "01000000000",
+      items: [{ id: "p1", qty: 1 }],
+      paymentMethod: "cash",
+      source: "pos",
+      cashReceived: true,
+      cashReceivedAmount: 100,
+    });
+
+    expect(res.status).toBe(201);
+    // Only the trusted cash-reception verification is created.
+    expect(mockPrisma.paymentVerification.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.paymentVerification.create.mock.calls[0][0].data.source).toBe("cash_reception");
   });
 });
 

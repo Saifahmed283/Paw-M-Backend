@@ -150,7 +150,7 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
             referenceId: "",
           });
         }
-        await tx.payment.create({
+        const payment = await tx.payment.create({
           data: {
             id: await nextId("PAY", "payment"),
             title: `${isPos ? "POS" : "Store"} — ${order.customerName}`.slice(0, 200),
@@ -165,6 +165,26 @@ router.post("/", optionalClientOrStaff, validate(createOrderSchema), async (req,
             items: { create: paymentItems },
           },
         });
+
+        // Bank/outlet payments are not settled at checkout. Queue them for
+        // review immediately: the cashier's "Settle bill" points staff at the
+        // verification queue, which must contain the sale they just rung up.
+        // A later customer proof submission supersedes this placeholder row.
+        if (PROOF_PAYMENT_METHODS.has(paymentMethod)) {
+          await tx.paymentVerification.create({
+            data: {
+              orderId: order.id,
+              paymentId: payment.id,
+              method: paymentMethod,
+              amount: total,
+              source: isPos ? "pos_transfer" : "store_transfer",
+              decision: "submitted",
+              note: isPos
+                ? "POS sale awaiting bank-statement verification"
+                : "Store order awaiting bank-statement verification",
+            },
+          });
+        }
 
         return order;
       },

@@ -234,8 +234,14 @@ router.get("/admin/submissions", denyClientSession, authenticateUser, requireAdm
   if (status !== "all" && !DECISIONS.includes(status)) {
     return res.status(400).json({ error: "Invalid status filter" });
   }
+  // A cashier can jump here with a specific sale; filter server-side so the
+  // focused order is visible regardless of the currently selected status.
+  const orderId = String(req.query.orderId ?? "").trim();
   try {
-    const where = status === "all" ? {} : { decision: status };
+    const where = {
+      ...(status === "all" ? {} : { decision: status }),
+      ...(orderId ? { orderId } : {}),
+    };
     const [rows, total] = await Promise.all([
       prisma.paymentVerification.findMany({
         where,
