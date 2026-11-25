@@ -2,15 +2,16 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { todayStr } from "../lib/utils.js";
 import { clinicDayRange, expectedForDate, round2 } from "../lib/clinic-day.js";
+import { employeeNameMap, mapCashWithdrawal } from "../lib/cash-withdrawal.js";
 import { logger } from "../lib/logger.js";
 import { calculateHours } from "../services/payroll.js";
+import { resolveEmployeeId } from "../lib/resolve-employee.js";
 import { authenticateUser, requireStaff } from "../middleware/auth.js";
 
 const router = Router();
 const log = logger.child({ module: "routes/work-days" });
 
 const METHODS = ["cash", "fawry", "instapay"];
-
 const sum = (items, pick) => round2(items.reduce((acc, item) => acc + pick(item), 0));
 
 function buildFinance({ orders, payments, verifications, cashDrawer, sessions, expectedCash }) {
@@ -104,17 +105,225 @@ function buildFinance({ orders, payments, verifications, cashDrawer, sessions, e
   };
 }
 
-router.get("/", authenticateUser, requireStaff, async (_req, res) => {
+function sessionEnd(session, sessions) {
+  if (session.endedAt) return new Date(session.endedAt);
+  const next = sessions
+    .filter(
+      (s) =>
+        s.employeeId === session.employeeId &&
+        s.id !== session.id &&
+        new Date(s.startedAt) > new Date(session.startedAt),
+    )
+    .sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt))[0];
+  return next ? new Date(next.startedAt) : new Date();
+}
+
+function inSession(value, session, sessions) {
+  if (!value) return false;
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) return false;
+  return time >= new Date(session.startedAt) && time <= sessionEnd(session, sessions);
+}
+
+/** One record belongs to the most recently started shift that contains it. */
+function pickSession(value, sessions) {
+  return sessions
+    .filter((session) => inSession(value, session, sessions))
+    .sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt))[0] ?? null;
+}
+
+function staffIdFromLog(log, sessions, adminUsers) {
+  const byStaff = /by staff #(\d+)/.exec(String(log.detail ?? ""));
+  if (byStaff) {
+    const account = adminUsers.find((user) => user.id === Number(byStaff[1]));
+    if (account?.employeeId) return account.employeeId;
+  }
+  const targetSession = sessions.find((session) => session.id === log.target);
+  if (targetSession?.employeeId) return targetSession.employeeId;
+  return null;
+}
+
+function attributeDay({ logs, orders, payments, sessions, adminUsers }) {
+  const usernameToEmployee = new Map(
+    adminUsers.filter((user) => user.employeeId).map((user) => [user.username, user.employeeId]),
+  );
+  const logAttribution = new Map();
+  for (const entry of logs) {
+    const employeeId =
+      staffIdFromLog(entry, sessions, adminUsers) ?? pickSession(entry.createdAt, sessions)?.employeeId;
+    if (employeeId) logAttribution.set(entry.id, employeeId);
+  }
+  const orderAttribution = new Map();
+  for (const order of orders) {
+    const employeeId = pickSession(order.createdAt, sessions)?.employeeId;
+    if (employeeId) orderAttribution.set(order.id, employeeId);
+  }
+  const paymentAttribution = new Map();
+  for (const payment of payments) {
+    const employeeId =
+      usernameToEmployee.get(payment.requestedBy) ??
+      pickSession(payment.createdAt, sessions)?.employeeId;
+    if (employeeId) paymentAttribution.set(payment.id, employeeId);
+  }
+  return { logAttribution, orderAttribution, paymentAttribution };
+}
+
+/** Repeated identical actions become one row with a count, not a long log. */
+function summarizeLogs(logs) {
+  const groups = new Map();
+  for (const entry of logs) {
+    const key = `${entry.action}|${entry.target}|${entry.detail}`;
+    const existing = groups.get(key);
+    const time = new Date(entry.createdAt).getTime();
+    if (existing) {
+      existing.count += 1;
+      if (time > new Date(existing.createdAt).getTime()) existing.createdAt = entry.createdAt;
+    } else {
+      groups.set(key, {
+        id: entry.id,
+        action: entry.action,
+        target: entry.target,
+        detail: entry.detail,
+        count: 1,
+        createdAt: entry.createdAt,
+      });
+    }
+  }
+  return [...groups.values()].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+}
+
+function buildStaffGroups({ sessions, orders, payments, logs, employees, attribution }) {
+  const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
+  const groups = new Map();
+
+  const groupFor = (employeeId, fallback) => {
+    const key = employeeId ?? `session:${fallback?.id ?? "unknown"}`;
+    if (!groups.has(key)) {
+      const employee = employeeById.get(key);
+      groups.set(key, {
+        id: key,
+        employee: employee
+          ? { id: employee.id, fullName: employee.fullName, role: employee.role, email: employee.email }
+          : { id: key, fullName: "Unassigned", role: "staff", email: "" },
+        sessions: [],
+        hours: 0,
+        ordersCount: 0,
+        revenue: 0,
+        cashCollected: 0,
+        activityCount: 0,
+        logs: [],
+        shiftCount: 0,
+        firstCheckIn: null,
+        lastCheckOut: null,
+      });
+    }
+    return groups.get(key);
+  };
+
+  for (const session of sessions) {
+    groupFor(session.employeeId, session).sessions.push(session);
+  }
+
+  const result = [];
+  for (const [employeeId, group] of groups) {
+    const shifts = group.sessions.sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt));
+    group.shiftCount = shifts.length;
+    group.hours = round2(
+      shifts.reduce(
+        (total, session) =>
+          total + calculateHours(new Date(session.startedAt), sessionEnd(session, shifts)),
+        0,
+      ),
+    );
+    group.firstCheckIn = shifts[0]?.startedAt ?? null;
+    const ended = shifts.map((session) => session.endedAt).filter(Boolean);
+    group.lastCheckOut = ended.length
+      ? ended.sort((a, b) => new Date(b) - new Date(a))[0]
+      : null;
+
+    const ownOrders = orders.filter((order) => attribution.orderAttribution.get(order.id) === employeeId);
+    group.ordersCount = ownOrders.length;
+    group.revenue = sum(
+      ownOrders.filter((order) => order.status !== "cancelled"),
+      (order) => order.total,
+    );
+
+    const ownPayments = payments.filter(
+      (payment) => attribution.paymentAttribution.get(payment.id) === employeeId,
+    );
+    group.cashCollected = sum(
+      ownPayments.filter((payment) => payment.method === "cash" && payment.status === "paid"),
+      (payment) => payment.amount,
+    );
+
+    group.logs = summarizeLogs(
+      logs.filter((entry) => attribution.logAttribution.get(entry.id) === employeeId),
+    );
+    group.activityCount = group.logs.reduce((total, entry) => total + entry.count, 0);
+    result.push(group);
+  }
+
+  return result.sort(
+    (a, b) => new Date(b.firstCheckIn ?? 0).getTime() - new Date(a.firstCheckIn ?? 0).getTime(),
+  );
+}
+
+function scopedIdsForEmployee({ orders, payments, sessions, employeeId, adminUsers }) {
+  if (!employeeId) return { orderIds: new Set(), paymentIds: new Set(), ownSessions: [] };
+  const usernameToEmployee = new Map(
+    adminUsers.filter((user) => user.employeeId).map((user) => [user.username, user.employeeId]),
+  );
+  const ownSessions = sessions.filter((session) => session.employeeId === employeeId);
+  const orderIds = new Set(
+    orders
+      .filter((order) => pickSession(order.createdAt, ownSessions)?.employeeId === employeeId)
+      .map((order) => order.id),
+  );
+  const paymentIds = new Set(
+    payments
+      .filter(
+        (payment) =>
+          usernameToEmployee.get(payment.requestedBy) === employeeId ||
+          pickSession(payment.createdAt, ownSessions)?.employeeId === employeeId,
+      )
+      .map((payment) => payment.id),
+  );
+  return { orderIds, paymentIds, ownSessions };
+}
+
+router.get("/", authenticateUser, requireStaff, async (req, res) => {
   try {
-    const [bookings, orders, payments, sessions] = await Promise.all([
+    const isFullAccess = req.user.role !== "staff";
+    const employeeId = isFullAccess ? null : await resolveEmployeeId(req.user.id);
+    const [bookings, allOrders, allPayments, allSessions, adminUsers] = await Promise.all([
       prisma.booking.findMany({ select: { id: true, date: true, status: true } }),
       prisma.order.findMany({ select: { id: true, createdAt: true, total: true, status: true } }),
-      prisma.payment.findMany({ select: { id: true, date: true, amount: true, status: true } }),
+      prisma.payment.findMany({ select: { id: true, date: true, amount: true, status: true, requestedBy: true, createdAt: true } }),
       prisma.workSession.findMany({
-        select: { id: true, date: true, startedAt: true, endedAt: true },
+        select: { id: true, date: true, employeeId: true, startedAt: true, endedAt: true },
         orderBy: { startedAt: "desc" },
       }),
+      prisma.adminUser.findMany({ select: { id: true, username: true, employeeId: true } }),
     ]);
+
+    let orders = allOrders;
+    let payments = allPayments;
+    let sessions = allSessions;
+    if (!isFullAccess) {
+      const scoped = scopedIdsForEmployee({
+        orders: allOrders,
+        payments: allPayments,
+        sessions: allSessions,
+        employeeId,
+        adminUsers,
+      });
+      orders = allOrders.filter((order) => scoped.orderIds.has(order.id));
+      payments = allPayments.filter((payment) => scoped.paymentIds.has(payment.id));
+      sessions = scoped.ownSessions;
+    }
+
     const days = new Map();
     const addDay = (day) => {
       if (!days.has(day)) {
@@ -129,39 +338,43 @@ router.get("/", authenticateUser, requireStaff, async (_req, res) => {
         });
       }
     };
-    for (const b of bookings) {
-      addDay(b.date);
-      days.get(b.date).bookings++;
+    for (const booking of isFullAccess ? bookings : []) {
+      addDay(booking.date);
+      days.get(booking.date).bookings++;
     }
-    for (const o of orders) {
-      const day = todayStr(new Date(o.createdAt));
+    for (const order of orders) {
+      const day = todayStr(new Date(order.createdAt));
       addDay(day);
-      const d = days.get(day);
-      d.orders++;
-      if (o.status !== "cancelled") d.revenue += o.total;
+      const entry = days.get(day);
+      entry.orders++;
+      if (order.status !== "cancelled") entry.revenue += order.total;
     }
-    for (const p of payments) {
-      addDay(p.date);
-      const d = days.get(p.date);
-      d.payments++;
-      if (p.status === "paid") d.paymentsTotal += p.amount;
+    for (const payment of payments) {
+      addDay(payment.date);
+      const entry = days.get(payment.date);
+      entry.payments++;
+      if (payment.status === "paid") entry.paymentsTotal += payment.amount;
     }
-    for (const s of sessions) {
-      addDay(s.date);
-      if (!days.get(s.date).session) {
-        days.get(s.date).session = { id: s.id, startedAt: s.startedAt, endedAt: s.endedAt };
+    for (const session of sessions) {
+      addDay(session.date);
+      if (!days.get(session.date).session) {
+        days.get(session.date).session = {
+          id: session.id,
+          startedAt: session.startedAt,
+          endedAt: session.endedAt,
+        };
       }
     }
     const list = [...days.values()]
-      .map((d) => ({
-        ...d,
-        revenue: round2(d.revenue),
-        paymentsTotal: round2(d.paymentsTotal),
+      .map((entry) => ({
+        ...entry,
+        revenue: round2(entry.revenue),
+        paymentsTotal: round2(entry.paymentsTotal),
       }))
       .sort((a, b) => b.date.localeCompare(a.date));
     res.json(list);
-  } catch (e) {
-    log.error({ err: e }, "failed to load workdays");
+  } catch (err) {
+    log.error({ err }, "failed to load workdays");
     res.status(500).json({ error: "Failed to load workday folders" });
   }
 });
@@ -172,90 +385,140 @@ router.get("/:date", authenticateUser, requireStaff, async (req, res) => {
     return res.status(400).json({ error: "Date must be YYYY-MM-DD." });
   }
   try {
+    const isFullAccess = req.user.role !== "staff";
+    const employeeId = isFullAccess ? null : await resolveEmployeeId(req.user.id);
     const { start, end } = clinicDayRange(day);
-    const [bookings, orders, payments, sessions, logs, cashDrawer, verifications, expectedCash] =
-      await Promise.all([
-        prisma.booking.findMany({ where: { date: day }, orderBy: { time: "asc" } }),
-        prisma.order.findMany({
-          where: { createdAt: { gte: start, lt: end } },
-          orderBy: { createdAt: "desc" },
-        }),
-        prisma.payment.findMany({
-          where: { date: day },
-          orderBy: { createdAt: "desc" },
-          include: { items: true },
-        }),
-        prisma.workSession.findMany({
-          where: { date: day },
-          orderBy: { startedAt: "asc" },
-          include: {
-            employee: { select: { id: true, fullName: true, role: true, email: true } },
-            custody: true,
-          },
-        }),
-        prisma.auditLog.findMany({
-          where: { createdAt: { gte: start, lt: end } },
-          orderBy: { createdAt: "desc" },
-        }),
-        prisma.cashDrawerClose.findFirst({
-          where: { date: day },
-          orderBy: { createdAt: "desc" },
-          include: { countedByUser: { select: { id: true, username: true } } },
-        }),
-        prisma.paymentVerification.findMany({
-          where: { createdAt: { gte: start, lt: end } },
-          select: { id: true, decision: true, method: true, amount: true, source: true },
-        }),
-        expectedForDate(prisma, day),
-      ]);
+    const [
+      allBookings,
+      allOrders,
+      allPayments,
+      allSessions,
+      allLogs,
+      cashDrawer,
+      allVerifications,
+      expectedCash,
+      adminUsers,
+      employees,
+      allWithdrawals,
+    ] = await Promise.all([
+      prisma.booking.findMany({ where: { date: day }, orderBy: { time: "asc" } }),
+      prisma.order.findMany({
+        where: { createdAt: { gte: start, lt: end } },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.payment.findMany({
+        where: { date: day },
+        orderBy: { createdAt: "desc" },
+        include: { items: true },
+      }),
+      prisma.workSession.findMany({
+        where: { date: day },
+        orderBy: { startedAt: "asc" },
+        include: {
+          employee: { select: { id: true, fullName: true, role: true, email: true } },
+          custody: true,
+        },
+      }),
+      prisma.auditLog.findMany({
+        where: { createdAt: { gte: start, lt: end } },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.cashDrawerClose.findFirst({
+        where: { date: day },
+        orderBy: { createdAt: "desc" },
+        include: { countedByUser: { select: { id: true, username: true } } },
+      }),
+      prisma.paymentVerification.findMany({
+        where: { createdAt: { gte: start, lt: end } },
+        select: { id: true, decision: true, method: true, amount: true, source: true },
+      }),
+      expectedForDate(prisma, day),
+      prisma.adminUser.findMany({ select: { id: true, username: true, employeeId: true } }),
+      prisma.employee.findMany({
+        select: { id: true, fullName: true, role: true, email: true },
+      }),
+      prisma.cashWithdrawal.findMany({
+        where: { date: day },
+        orderBy: { createdAt: "desc" },
+        include: {
+          requester: { select: { id: true, username: true } },
+          reviewer: { select: { id: true, username: true } },
+        },
+      }),
+    ]);
 
-    // AuditLog has no actor column, so a session's time window is the most
-    // reliable attribution available without changing the schema. Each log
-    // belongs to exactly one non-overlapping shift in the day.
-    const staff = sessions.map((session, index) => {
-      const through = session.endedAt ?? sessions[index + 1]?.startedAt ?? new Date();
-      const inShift = (value) => {
-        const time = value instanceof Date ? value : new Date(value);
-        return time >= session.startedAt && time <= through;
-      };
-      const shiftOrders = orders.filter((o) => inShift(o.createdAt));
-      const shiftLogs = logs.filter((l) => inShift(l.createdAt));
-      return {
-        ...session,
-        endedAt: session.endedAt ?? null,
-        hours: round2(calculateHours(session.startedAt, session.endedAt ?? through)),
-        ordersCount: shiftOrders.length,
-        revenue: sum(
-          shiftOrders.filter((o) => o.status !== "cancelled"),
-          (o) => o.total,
-        ),
-        activityCount: shiftLogs.length,
-        logs: shiftLogs,
-      };
+    const attribution = attributeDay({
+      logs: allLogs,
+      orders: allOrders,
+      payments: allPayments,
+      sessions: allSessions,
+      adminUsers,
     });
+    const staffGroups = buildStaffGroups({
+      sessions: allSessions,
+      orders: allOrders,
+      payments: allPayments,
+      logs: allLogs,
+      employees,
+      attribution,
+    });
+
+    let bookings = allBookings;
+    let orders = allOrders;
+    let payments = allPayments;
+    let sessions = allSessions;
+    let logs = allLogs;
+    let verifications = allVerifications;
+    let staff = staffGroups;
+    let scopedCashDrawer = cashDrawer;
+    if (!isFullAccess) {
+      const scoped = scopedIdsForEmployee({
+        orders: allOrders,
+        payments: allPayments,
+        sessions: allSessions,
+        employeeId,
+        adminUsers,
+      });
+      orders = allOrders.filter((order) => scoped.orderIds.has(order.id));
+      payments = allPayments.filter((payment) => scoped.paymentIds.has(payment.id));
+      sessions = scoped.ownSessions;
+      logs = allLogs.filter((entry) => attribution.logAttribution.get(entry.id) === employeeId);
+      verifications = [];
+      staff = staffGroups.filter((group) => group.id === employeeId);
+      // A cashier's view never includes the shared till reconciliation.
+      scopedCashDrawer = null;
+      bookings = [];
+    }
 
     const finance = buildFinance({
       orders,
       payments,
       verifications,
-      cashDrawer,
+      cashDrawer: scopedCashDrawer,
       sessions,
-      expectedCash,
+      expectedCash: isFullAccess ? expectedCash : 0,
     });
+    const names = employeeNameMap(employees);
+    const withdrawals = allWithdrawals
+      .filter((row) => isFullAccess || row.requestedBy === req.user.id)
+      .map((row) => mapCashWithdrawal(row, names));
 
     res.json({
       date: day,
-      session: staff.at(-1) ?? null,
-      sessions: staff,
+      view: isFullAccess ? "admin" : "staff",
+      scopeEmployeeId: employeeId,
+      session: sessions.at(-1) ?? null,
+      sessions,
       staff,
       bookings,
       orders,
       payments,
       logs,
       finance,
+      withdrawals,
     });
-  } catch (e) {
-    log.error({ err: e }, "failed to load workday");
+  } catch (err) {
+    log.error({ err }, "failed to load workday");
     res.status(500).json({ error: "Failed to load workday folder" });
   }
 });

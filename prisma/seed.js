@@ -80,7 +80,15 @@ const SETTINGS = {
       "workdays",
       "archive",
     ],
-    staff: ["overview", "requests", "notifications", "tasks", "reservations"],
+    staff: [
+      "overview",
+      "requests",
+      "notifications",
+      "tasks",
+      "reservations",
+      "prescriptions",
+      "workdays",
+    ],
   },
 };
 

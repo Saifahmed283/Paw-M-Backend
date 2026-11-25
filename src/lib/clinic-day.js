@@ -42,3 +42,63 @@ export async function expectedForDate(db, dateKey) {
   });
   return round2(aggregate?._sum?.amount ?? 0);
 }
+
+/**
+ * Cash physically available for a clinic day.
+ *
+ * Once a drawer count is saved it is the source of truth: the till only holds
+ * what was actually counted. Before a count, availability is opening cash plus
+ * approved cash received. Pending withdrawals are reserved as well so several
+ * staff cannot each spend the same balance.
+ */
+export async function cashAvailabilityForDate(
+  db,
+  dateKey,
+  { includePending = true, excludeWithdrawalId = null } = {},
+) {
+  const close = await db.cashDrawerClose.findFirst({
+    where: { date: dateKey },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const expected = close?.expected === null || close?.expected === undefined
+    ? await expectedForDate(db, dateKey)
+    : round2(close.expected);
+
+  let openingAmount = 0;
+  if ((close?.counted === null || close?.counted === undefined) && db.cashCustody?.findMany) {
+    const custody = await db.cashCustody.findMany({
+      where: { date: dateKey },
+      select: { openingAmount: true },
+    });
+    openingAmount = round2(custody.reduce((sum, row) => sum + row.openingAmount, 0));
+  }
+
+  const base = close?.counted === null || close?.counted === undefined
+    ? round2(openingAmount + expected)
+    : round2(close.counted);
+
+  const statuses = includePending ? ["pending", "approved"] : ["approved"];
+  let reserved = 0;
+  if (db.cashWithdrawal?.aggregate) {
+    const aggregate = await db.cashWithdrawal.aggregate({
+      _sum: { amount: true },
+      where: {
+        date: dateKey,
+        status: { in: statuses },
+        ...(excludeWithdrawalId ? { id: { not: excludeWithdrawalId } } : {}),
+      },
+    });
+    reserved = round2(aggregate?._sum?.amount ?? 0);
+  }
+
+  return {
+    available: round2(Math.max(0, base - reserved)),
+    base,
+    expected,
+    counted: close?.counted ?? null,
+    openingAmount,
+    reserved,
+    close: close ?? null,
+  };
+}

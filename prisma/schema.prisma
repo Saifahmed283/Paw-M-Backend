@@ -145,6 +145,8 @@ model AdminUser {
 
   paymentVerifications PaymentVerification[]
   cashDrawerCloses     CashDrawerClose[]
+  withdrawalsRequested CashWithdrawal[]      @relation("WithdrawalRequester")
+  withdrawalsReviewed  CashWithdrawal[]      @relation("WithdrawalReviewer")
 }
 
 model ClientAccount {
@@ -331,6 +333,29 @@ model PaymentVerification {
 
   @@index([orderId])
   @@index([decision])
+}
+
+/// Staff request to take a specific amount out of the till. Admin reviews the
+/// request; availability is re-checked at approval time so the drawer can never
+/// go negative.
+model CashWithdrawal {
+  id            String    @id @default(cuid())
+  date          String    // YYYY-MM-DD (clinic day the request belongs to)
+  amount        Float
+  note          String
+  status        String    @default("pending") // pending | approved | rejected
+  requestedBy   Int
+  requester     AdminUser @relation("WithdrawalRequester", fields: [requestedBy], references: [id])
+  employeeId    String?   // employee linked to the requesting account (snapshot)
+  workSessionId String?   // shift at the time of the request, when known
+  reviewedBy    Int?
+  reviewer      AdminUser? @relation("WithdrawalReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
+  reviewNote    String    @default("")
+  reviewedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([date, status])
+  @@index([requestedBy])
 }
 
 /// Per-day cash drawer reconciliation (expected vs counted).
