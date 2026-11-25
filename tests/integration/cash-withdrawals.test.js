@@ -99,6 +99,10 @@ describe("cash withdrawal API", () => {
       employeeName: "Cashier One",
     });
     expect(response.body.available).toBe(1050);
+    // The advisory lock returns PostgreSQL `void`; Prisma needs a serialisable
+    // projection, otherwise every live withdrawal request fails with P2010.
+    const lockSql = mockPrisma.$queryRaw.mock.calls[0][0].join(" ");
+    expect(lockSql).toContain("SELECT 1 AS acquired");
   });
 
   it("requires a reason note", async () => {

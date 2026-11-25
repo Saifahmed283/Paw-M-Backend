@@ -40,7 +40,11 @@ function respondWithError(res, err, fallbackMessage) {
 /** Serialize concurrent requests/approvals for one Cairo day. */
 async function lockCashDay(tx, date) {
   if (typeof tx.$queryRaw === "function") {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${"cash-withdrawal:" + date}))`;
+    // pg_advisory_xact_lock() returns `void`, which Prisma cannot deserialize.
+    // Keep the lock in a subquery and return a plain integer column instead.
+    await tx.$queryRaw`SELECT 1 AS acquired FROM (
+      SELECT pg_advisory_xact_lock(hashtext(${"cash-withdrawal:" + date}))
+    ) AS cash_day_lock`;
   }
 }
 
