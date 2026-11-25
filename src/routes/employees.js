@@ -4,6 +4,7 @@ import { logger } from "../lib/logger.js";
 import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 import { authenticateUser, requireAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
+import { isForeignKeyConstraintError } from "../lib/db-errors.js";
 import { createEmployeeSchema, updateEmployeeSchema } from "../schemas/employees.js";
 
 const router = Router();
@@ -84,7 +85,7 @@ router.delete("/:id", authenticateUser, requireAdmin, async (req, res) => {
     await prisma.employee.delete({ where: { id: req.params.id } });
     res.json({ ok: true, message: "Employee deleted successfully" });
   } catch (error) {
-    if (error.code === "P2003") {
+    if (isForeignKeyConstraintError(error)) {
       return res
         .status(409)
         .json({ error: "Cannot delete employee with existing records. Suspend instead." });

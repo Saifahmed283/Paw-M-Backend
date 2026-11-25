@@ -5,6 +5,7 @@ import { randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { config } from "../config.js";
 import { prisma } from "../lib/prisma.js";
 import { employeeEmailForUsername } from "../lib/employee-email.js";
+import { isForeignKeyConstraintError } from "../lib/db-errors.js";
 import { logAudit } from "../lib/utils.js";
 import { logger } from "../lib/logger.js";
 import { validate } from "../middleware/validate.js";
@@ -443,6 +444,9 @@ router.delete(
       logAudit("delete_account", String(id), `Account deleted: ${target.username} (${target.role}) by ${req.user.username}`);
       res.json({ ok: true });
     } catch (e) {
+      if (isForeignKeyConstraintError(e)) {
+        return res.status(409).json({ error: "Cannot delete an account with existing records. Suspend it instead." });
+      }
       log.error({ err: e }, "failed to delete account");
       res.status(500).json({ error: "Failed to delete account" });
     }
